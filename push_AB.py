@@ -9,11 +9,10 @@ import shutil
 import _thread
 import service.AssMaker
 import pysubs2
-import subprocess # 用于更高级的进程管理
-import os.path   # 用于跨平台的路径处理
+import subprocess
+import os.path
 
 # --- 全局配置 ---
-
 try:
     config = json.load(open('Config.json', encoding='utf-8'))
     path = config['path']
@@ -21,7 +20,7 @@ try:
     live_code = config['rtmp']['code']
     nightvideo = bool(int(config['nightvideo']['use']))
     rtmp_url = rtmp + live_code
-    # rtmp_url = "rtmp://192.168.31.217:1935/livehime"
+    #rtmp_url = "rtmp://192.168.3.249:1935/livehime"
 except FileNotFoundError:
     print("错误：Config.json 未找到。请确保配置文件存在。")
     sys.exit(1)
@@ -35,8 +34,6 @@ FIFO_PATH = "/tmp/live_stream.fifo"
 
 # 支持的音频格式
 AUDIO_EXTENSIONS = ('.mp3', '.flac', '.m4a', '.wav', '.ogg', '.aac')
-
-# --- 辅助函数 (保持不变) ---
 
 def get_audio_title(filepath):
     """
@@ -59,7 +56,7 @@ def get_audio_title(filepath):
 
 def modify_ass_by_title(output_path, new_text):
     """
-    修改 ASS 文件
+    修改 ASS 文件，为当前画面加上歌名
     """
     try:
         default_ass_path = os.path.join(path, 'default.ass')
@@ -107,14 +104,17 @@ def start_pusher(fifo_path, rtmp_url):
         'ffmpeg',
         '-re',           # 以本机帧率读取
         '-i', fifo_path, # 从 FIFO 读取
-        '-r','30 '
-        '-pix_fmt yuv420p '
-        '-c:a copy '
-        '-c:v libx264 '
-        '-bufsize 320k '
-        '-g 60 -crf 33 '
+        # '-r','30 '
+        # '-pix_fmt yuv420p '
+        # '-c:a copy '
+        '-c:a aac '
+        # '-c:v h264_v4l2m2m '
+        '-c:v copy '
+        # f'-maxrate {config["rtmp"]["bitrate"]}k '
+        # '-bufsize 320k '
+        # '-g 60 -crf 33 '
         '-f', 'flv',
-        rtmp_url
+        f'"{rtmp_url}"'
         # local_rtmp_url
         # local_udp_url
     ]
@@ -127,8 +127,7 @@ def start_pusher(fifo_path, rtmp_url):
         if not line and process.poll() is not None:
             break
         if line.strip():
-            print(f"[Pusher]: {line.strip()}")
-            
+            print(f"[Pusher]: {line.strip()}")       
     print("--- 推流器 (进程 1) 已退出 ---")
 
 def stream_to_fifo(ffmpeg_command, fifo_stream):
@@ -137,7 +136,6 @@ def stream_to_fifo(ffmpeg_command, fifo_stream):
     执行 ffmpeg 命令，捕获其 stdout，并将其写入 FIFO 流。
     """
     print(f"--- 启动处理器 (进程 2) ---\n{ffmpeg_command}\n")
-    
     try:
         process = subprocess.Popen(ffmpeg_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
@@ -169,8 +167,6 @@ def stream_to_fifo(ffmpeg_command, fifo_stream):
         if 'process' in locals() and process.poll() is None:
             process.kill()
         raise
-
-# --- 主逻辑 ---
 
 def main():
     # 1. 创建 FIFO
@@ -378,13 +374,13 @@ def main():
                                     f'-f image2 -i "{pic_path}" -i "{full_file_path}" '
                                     f'-vf ass=filename="{temp_ass_path}" '
                                     # f'-bufsize 320k -c:v libx264 -g 30 -crf 33 -f flv -'
-                                    f'-c:v libx264 -maxrate {config["rtmp"]["bitrate"]}k -pix_fmt yuv420p -preset fast '
+                                    f'-c:v h264_v4l2m2m -maxrate {config["rtmp"]["bitrate"]}k -pix_fmt yuv420p -preset fast '
                                     f'-c:a aac -b:a 320k '
+                                    f'-bsf:v h264_mp4toannexb '
                                     f'-f mpegts -'
-                                    # f'ffmpeg -i ~/test.flv -pix_fmt yuv420p -c:a copy -c:v copy -f flv -'
+                                    # f'ffmpeg -i ~/test.flv -pix_fmt yuv420p -c:a copy -c:v copy -f flv '
                                 )
-                            
-                            stream_to_fifo(ffmpeg_cmd, fifo_write_stream)
+                                stream_to_fifo(ffmpeg_cmd, fifo_write_stream)
 
                         # --- 垫片视频 (FLV) ---
                         if selected_file.find('.flv') != -1:
