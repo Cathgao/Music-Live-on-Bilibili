@@ -106,8 +106,8 @@ def start_pusher(fifo_path, rtmp_url):
         '-i', fifo_path, # 从 FIFO 读取
         # '-r','30 '
         # '-pix_fmt yuv420p '
-        # '-c:a copy '
-        '-c:a aac '
+        '-c:a copy '
+        # '-c:a aac '
         # '-c:v h264_v4l2m2m '
         '-c:v copy '
         # f'-maxrate {config["rtmp"]["bitrate"]}k '
