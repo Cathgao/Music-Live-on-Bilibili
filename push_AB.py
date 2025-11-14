@@ -102,7 +102,7 @@ def start_pusher(fifo_path, rtmp_url):
     local_rtmp_url = 'rtmp://127.0.0.1:1935/live/teststream' #virtual camera
     cmd = [
         'ffmpeg',
-        '-re',           # 以本机帧率读取
+        # '-re',           # 以本机帧率读取
         '-i', fifo_path, # 从 FIFO 读取
         # '-r','30 '
         # '-pix_fmt yuv420p '
@@ -371,6 +371,7 @@ def main():
                                 
                                 ffmpeg_cmd = (
                                     f'ffmpeg -threads 0 -loop 1 -r 2 -t {int(seconds)} ' 
+                                    f're '
                                     f'-f image2 -i "{pic_path}" -i "{full_file_path}" '
                                     f'-vf ass=filename="{temp_ass_path}" '
                                     # f'-bufsize 320k -c:v libx264 -g 30 -crf 33 -f flv -'
