@@ -370,11 +370,11 @@ def main():
                                 modify_ass_by_title(temp_ass_path, title)
                                 
                                 ffmpeg_cmd = (
-                                    f'ffmpeg -threads 0 -loop 1 -r 30 -t {int(seconds)} ' 
+                                    f'ffmpeg -threads 0 -loop 1 -r 2 -t {int(seconds)} ' 
                                     f'-f image2 -i "{pic_path}" -i "{full_file_path}" '
                                     f'-vf ass=filename="{temp_ass_path}" '
                                     # f'-bufsize 320k -c:v libx264 -g 30 -crf 33 -f flv -'
-                                    f'-c:v h264_v4l2m2m -maxrate {config["rtmp"]["bitrate"]}k -pix_fmt yuv420p -preset fast '
+                                    f'-c:v h264_v4l2m2m -maxrate {config["rtmp"]["bitrate"]}k -pix_fmt yuv420p -preset fast -g 4 '
                                     f'-c:a aac -b:a 320k '
                                     f'-bsf:v h264_mp4toannexb '
                                     f'-f mpegts -'
