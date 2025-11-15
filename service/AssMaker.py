@@ -2,10 +2,15 @@
 import os
 import time
 import re
-from mutagen.mp3 import MP3
-from moviepy.editor import VideoFileClip
+# from mutagen.mp3 import MP3
+# from mutagen.flac import FLAC
+# from mutagen import File
+from moviepy import VideoFileClip
+import audioread
+import glob
 
-
+#支持的音频格式
+AUDIO_EXTENSIONS = ('.mp3', '.flac', '.m4a', '.wav', '.ogg', '.aac')
 
 #生成字幕文件，传入参数：
 #filename：文件名
@@ -41,18 +46,16 @@ Style: center_down_big,微软雅黑,40,&H00FFFFFF,&H00FFFFFF,&H28D17EF4,&H500E0A
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 2,0:00:00.00,9:00:00.00,left_down,,0,0,0,,'''+info+'''
-Dialogue: 2,0:00:00.00,9:00:00.00,right_down,,0,0,0,,基于云服务器''''''
-Dialogue: 2,0:00:00.00,9:00:00.00,left_up,,0,0,0,,yfme的音乐台
 Dialogue: 2,0:00:00.00,9:00:00.00,right_up,,0,0,0,,
 '''+ass+asst+timer_get #44行文字后第3处  \\N  +'点播日期：'+time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))+
-    file = open(path+'/resource/playlist/'+str(filename)+'.ass','w')    #保存ass字幕文件
+    file = open(path+'/resource/playlist/'+str(filename)+'.ass','w',encoding='utf-8')    #保存ass字幕文件
     file.write(file_content)
     file.close()
 
 #生成info文件
 def make_info(filename, info, path):
     file_content = info
-    file = open(path+'/resource/playlist/'+str(filename)+'.info','w')
+    file = open(path+'/resource/playlist/'+str(filename)+'.info','w',encoding='utf-8')
     file.write(file_content)
     file.close()
 
@@ -63,16 +66,26 @@ def s3t(sec):
 
 def timer_create(filename, path):
     result='\r\n'
-    filename = filename.replace('ok','')
-    if(os.path.isfile(path+'/resource/playlist/'+str(filename)+'.mp3')):
+    audio_dir = os.path.join(path, 'resource', 'playlist')
+    search_pattern = os.path.join(audio_dir, filename + '.*')
+    audio_files = [f for f in glob.glob(search_pattern) 
+                   if os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS]
+    seconds = None # 初始化时长变量
+    if audio_files:
+        audio_path = audio_files[0]
         try:
-            audio = MP3(path+'/resource/playlist/'+str(filename)+'.mp3')   #获取mp3文件信息
-            seconds=int(audio.info.length)   #获取时长
-            for i in range(1, seconds):
-                result+='Dialogue: 2,'+s3t(i-1)+'.00,'+s3t(i)+'.00,right_down,,0,0,0,,歌曲时间:'+s3t(i)+'/'+s3t(seconds)+'\r\n'
+            # === 使用 audioread 获取时长 ===
+            with audioread.audio_open(audio_path) as audio_file:
+                # duration 是秒数，可能是浮点数
+                duration = audio_file.duration 
+                seconds = int(duration) # 转换为整数秒
+            if seconds is not None and seconds > 0:
+                for i in range(1, seconds):
+                    result+='Dialogue: 2,'+s3t(i-1)+'.00,'+s3t(i)+'.00,right_down,,0,0,0,,歌曲时间:'+s3t(i)+'/'+s3t(seconds)+'\r\n'
         except Exception as e:
-            print('shit')
-            print(e)
+            print(f'Error processing audio file {audio_path}: {e}')
+    else:
+        print(f'Error: No supported audio file found for filename "{filename}" in {audio_dir} with extensions {AUDIO_EXTENSIONS}')
     # else:
         # try:
             # if(os.path.isfile(path+'/resource/playlist/'+str(filename)+'.mp4')):    #获取视频文件信息
