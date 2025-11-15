@@ -21,6 +21,7 @@ credential = Credential(sessdata=config["danmu"]["SESSDATA"], bili_jct=config["d
 monitor  = live.LiveDanmaku(int(config['danmu']['roomid']), credential=credential)
 sender = live.LiveRoom(int(config['danmu']['roomid']), credential=credential)
 path = config['path']
+# 这个temp_path是我的内存盘，为了减少磁盘读写。必须改成你可用的路径
 temp_path = "R:\\temp\\"
 roomid = config['danmu']['roomid']
 download_api_url = config['musicapi']

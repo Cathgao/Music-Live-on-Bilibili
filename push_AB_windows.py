@@ -21,8 +21,10 @@ try:
     path = config['path']
     rtmp = config['rtmp']['url']
     live_code = config['rtmp']['code']
-    temp_ass_path = os.path.join("R:\\temp\\", 'temp.ass') # 使用工作路径下的临时文件
+    # 这个temp_path是我的内存盘，为了减少磁盘读写。必须改成你可用的路径
     temp_path = "R:\\temp\\"
+    temp_ass_path = os.path.join(temp_path, 'temp.ass') # 使用工作路径下的临时文件
+    
     nightvideo = bool(int(config['nightvideo']['use']))
     rtmp_url = rtmp + live_code
     # rtmp_url = "rtmp://192.168.31.217:1935/livehime"
