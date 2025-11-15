@@ -1,12 +1,9 @@
 import asyncio
 import json
-from bilibili_api import live, sync
+from bilibili_api import Credential, Danmaku, sync
+from bilibili_api.live import LiveDanmaku, LiveRoom
 import os
-import service.PostDanmu
-from bilibili_api import Credential
-import threading
 import service.AssMaker
-import service.GetSongInfo
 import time, datetime
 import urllib
 import urllib.request
@@ -18,10 +15,9 @@ import io
 config = json.load(open('./Config.json', encoding='utf-8'))
 
 credential = Credential(sessdata=config["danmu"]["SESSDATA"], bili_jct=config["danmu"]["bili_jct"], buvid3=config["danmu"]["buvid3"], ac_time_value=config["danmu"]["ac_time_value"])
-monitor  = live.LiveDanmaku(int(config['danmu']['roomid']), credential=credential)
-sender = live.LiveRoom(int(config['danmu']['roomid']), credential=credential)
+monitor  = LiveDanmaku(int(config['danmu']['roomid']), credential=credential)
+sender = LiveRoom(int(config['danmu']['roomid']), credential=credential)
 path = config['path']
-# 这个temp_path是我的内存盘，为了减少磁盘读写。必须改成你可用的路径
 temp_path = "R:\\temp\\"
 roomid = config['danmu']['roomid']
 download_api_url = config['musicapi']
@@ -366,7 +362,7 @@ class bilibiliClient():
     async def send_dm(self, Text):
         print(f'[DM_SENT] {Text}')
         # pass # 保持异步兼容
-        await sender.send_danmaku(Text)
+        await sender.send_danmaku(Danmaku(Text))
 
     async def pick_msg(self, User, UserID, Text):
         global encode_lock
@@ -392,19 +388,6 @@ class bilibiliClient():
                 
                 await asyncio.to_thread(sync_clean)
                 await self.send_dm('已经清空列表~')
-                return
-            elif Text == '切歌' or Text == '下一首':
-                open(f'{path}/resource/playlist/{base_name}.info', 'r' ,encoding='utf-8')
-                # 切歌逻辑：创建信号文件，告知 push_AB_windows.py 停止当前 Handler 进程
-                skip_flag_file = os.path.join(path, '.skip_current')
-                try:
-                    with open(skip_flag_file, 'w') as f:
-                        f.write('skip')
-                    await self.send_dm('已发送切歌信号，正在播放下一首...')
-                    print(f'[log] 收到切歌命令，已发送切歌信号')
-                except Exception as e:
-                    await self.send_dm('无法切歌：请重试')
-                    print(f'[log] 切歌信号发送失败: {e}')
                 return
         # 点播功能检查
         if rp_lock:
@@ -437,8 +420,8 @@ class bilibiliClient():
                         info_file.close()
                     except Exception as e:
                         print(e)
-
                     if(songs_count < 10):
+                        time.sleep(5)
                         await danmuji.send_dm(all_the_text)
                     songs_count += 1
             if(songs_count == 0):
