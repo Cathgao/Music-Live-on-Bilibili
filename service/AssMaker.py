@@ -78,7 +78,7 @@ def timer_create(filename, path):
             with audioread.audio_open(audio_path) as audio_file:
                 # duration 是秒数，可能是浮点数
                 duration = audio_file.duration 
-                seconds = int(duration) # 转换为整数秒
+                seconds = round(duration) # 转换为整数秒
             if seconds is not None and seconds > 0:
                 for i in range(1, seconds):
                     result+='Dialogue: 2,'+s3t(i-1)+'.00,'+s3t(i)+'.00,right_down,,0,0,0,,歌曲时间:'+s3t(i)+'/'+s3t(seconds)+'\r\n'
