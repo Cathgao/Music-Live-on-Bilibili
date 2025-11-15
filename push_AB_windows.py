@@ -84,7 +84,15 @@ def modify_ass_by_title(output_path, new_text):
         subs.save(output_path)
         print(f"修改后的 ASS 文件已保存到：{output_path}")
     except FileNotFoundError:
-        print(f"错误：找不到文件 {default_ass_path}")
+        # [修复] 即使 default.ass 找不到，也创建一个空的 ass 文件并添加标题
+        # 这样可以避免 ffmpeg 因为 ass 文件不存在而报错
+        print(f"警告：找不到文件 {default_ass_path}。将创建仅含标题的 ASS 文件。")
+        subs = pysubs2.SSAFile()
+        subs.styles['Title'] = pysubs2.SSAStyle(fontname='Arial', fontsize=24, primarycolor=pysubs2.Color(255,255,255))
+        new_line = pysubs2.SSAEvent(layer=2, start=0, end=3600000, text=new_text, style='Title')
+        subs.append(new_line)
+        subs.save(output_path)
+        print(f"已创建仅含标题的 ASS 文件到：{output_path}")
     except Exception as e:
         print(f"处理 ASS 文件时发生错误: {e}")
 
@@ -199,17 +207,36 @@ def monitor_pusher(process):
 def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
     """
     进程 2：处理器。
-    执行 ffmpeg 命令，捕获其 stdout，并将其写入推流器的标准输入 (stdin)。
-    支持通过 skip_flag_file 标志文件动态中止 Handler 进程（用于切歌功能）。
-    
-    关键改进：
-    1. 使用 stdin 管道而不是 stdout 来控制 FFmpeg 进程
-    2. 切歌时优雅地停止 FFmpeg，而不是强制终止
-    3. 确保完整的 MPEG-TS 包被发送到 Pusher
+    ...
+    [修复] 使用 taskkill /T /F 确保 ffmpeg.exe 子进程被杀死，防止泄露
     """
     print(f"--- 启动处理器 (进程 2) ---\n{ffmpeg_command}\n")
     process = None
     handler_stdin = None
+    
+    def force_kill_handler(proc, reason=""):
+        """
+        [新] 辅助函数，用于强制杀死进程树 (cmd.exe 和 ffmpeg.exe)。
+        """
+        if proc and proc.poll() is None:
+            pid = proc.pid
+            print(f"Handler 进程 {pid} {reason}，强制终止进程树...")
+            try:
+                # /T 终止指定的进程和由它启动的任何子进程。
+                # /F 强制终止进程。
+                kill_cmd = f"taskkill /F /T /PID {pid}"
+                print(f"执行: {kill_cmd}")
+                subprocess.run(kill_cmd, check=True, shell=True, capture_output=True, text=True)
+                print(f"成功终止进程树 (PID: {pid})。")
+            except Exception as kill_e:
+                print(f"使用 taskkill 终止进程树 (PID: {pid}) 失败: {kill_e}")
+                # 降级：尝试旧的 kill 方法
+                try:
+                    if proc.poll() is None:
+                        proc.kill()
+                except Exception:
+                    pass # 忽略错误
+
     try:
         # 清空旧的 skip 标志文件（如果存在）
         if os.path.exists(skip_flag_file):
@@ -218,7 +245,7 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
             except Exception:
                 pass
         
-        # 关键修改：打开 Handler 的 stdin，以便发送 'q' 命令优雅地停止它
+        # 打开 Handler 的 stdin，以便发送 'q' 命令优雅地停止它
         process = subprocess.Popen(ffmpeg_command, shell=True, stdin=subprocess.PIPE, 
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         handler_stdin = process.stdin
@@ -228,13 +255,11 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
         
         skip_requested = False
         while True:
-            # 检查切歌标志文件，若存在则优雅地停止 Handler 进程
+            # 检查切歌标志文件
             if os.path.exists(skip_flag_file) and not skip_requested:
                 print("[切歌] 检测到切歌信号，正在发送优雅停止命令给 Handler...")
                 skip_requested = True
                 
-                # 优雅地停止 FFmpeg：发送 'q' 命令到其 stdin
-                # 这会让 FFmpeg 正常完成当前帧并输出完整的 MPEG-TS 包
                 if handler_stdin:
                     try:
                         handler_stdin.write(b'q\n')
@@ -242,32 +267,25 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
                         print("[切歌] 已发送优雅停止命令。等待 Handler 完成...")
                     except (BrokenPipeError, IOError) as e:
                         print(f"[切歌] 无法发送停止命令: {e}，尝试强制终止...")
-                        if process.poll() is None:
-                            process.terminate()
-                            time.sleep(0.5)
-                            if process.poll() is None:
-                                process.kill()
+                        force_kill_handler(process, "无法发送 'q' 命令")
                 
-                # 清空标志文件
                 try:
                     os.remove(skip_flag_file)
                 except Exception:
                     pass
             
-            # 64k 缓冲区，用于读取 Handler 的输出
             data = process.stdout.read(65536) 
             if not data:
-                # Handler 已完成输出
-                print("[切歌] Handler 已完成优雅停止。")
-                break
+                if skip_requested:
+                    print("[切歌] Handler 已完成优雅停止。")
+                else:
+                    print("Handler 已完成正常播放。")
+                break # 正常结束或 'q' 结束
             try:
-                # 关键修改：将 Handler 的输出写入 Pusher 的 stdin
                 pusher_stdin.write(data)
-                # 每次写入后尝试刷新缓冲区，确保数据及时传送
                 try:
                     pusher_stdin.flush()
                 except (BrokenPipeError, IOError):
-                    # 忽略刷新时的错误
                     pass
             except BrokenPipeError:
                 print("错误：管道已损坏。推流器 (进程 1) 可能已崩溃。")
@@ -278,36 +296,30 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
                             handler_stdin.write(b'q\n')
                             handler_stdin.flush()
                         process.wait(timeout=2)
-                    except:
-                        if process.poll() is None:
-                            process.terminate()
-                            time.sleep(0.5)
-                            if process.poll() is None:
-                                process.kill()
-                raise
+                    except: # 捕获超时或写入错误
+                        force_kill_handler(process, "在 BrokenPipeError 后未在2秒内响应 'q'")
+                raise # 重新抛出异常，让 main 循环知道
         
-        # 确保 Handler 进程正常退出
+        # 确保 Handler 进程正常退出 (处理正常播放结束的情况)
         if process.poll() is None:
             try:
                 process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                print("警告：Handler 进程未在规定时间内退出，强制终止...")
-                process.terminate()
-                time.sleep(0.5)
-                if process.poll() is None:
-                    process.kill()
+                force_kill_handler(process, "播放结束但未在3秒内退出")
         
         stderr_output = process.stderr.read().decode('utf-8', errors='ignore')
         
         print(f"--- 处理器 (进程 2) 已完成 (RC: {process.returncode}) ---")
         
         if process.returncode != 0 and process.returncode != 255 and process.returncode != -15 and process.returncode != -2:
-            # -15 是 SIGTERM，-2 是 SIGINT（优雅停止的正常退出码）
             print("FFmpeg (进程 2) 错误输出:")
             print(stderr_output)
 
     except Exception as e:
-        print(f"stream_to_pusher 发生严重错误: {e}")
+        # 捕获所有其他异常 (包括 BrokenPipeError)
+        if not isinstance(e, BrokenPipeError):
+             print(f"stream_to_pusher 发生严重错误: {e}")
+             
         if process and process.poll() is None:
             try:
                 if handler_stdin:
@@ -315,8 +327,8 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
                     handler_stdin.flush()
                 process.wait(timeout=2)
             except:
-                process.kill()
-        raise
+                force_kill_handler(process, "在严重错误后未在2秒内响应 'q'")
+        raise # 重新抛出异常，让 main 循环处理
     finally:
         if handler_stdin:
             try:
@@ -565,7 +577,7 @@ def main():
                                 f"-pix_fmt yuv420p -c:v h264_qsv -maxrate {config['rtmp']['bitrate']}k -preset fast -g 10 "
                                 f"-af aformat=sample_rates=48000 -c:a aac -b:a 320k "
                                 f"-bsf:v h264_mp4toannexb "
-                                f"-f mpegts -" # 输出到标准输出，格式为 flv
+                                f"-f mpegts -"
                             )
                             stream_to_pusher(ffmpeg_cmd, pusher_stdin, skip_flag_file)
                             time.sleep(0.2)  # 切歌后延迟
@@ -591,9 +603,28 @@ def main():
                 pusher_stdin = pusher_process.stdin
                 print("推流器已重新启动，继续主循环。")
             except Exception as e:
-                print(f"主循环发生错误: {e}")
-                print("5秒后重试...")
+                # 捕获所有其他从 stream_to_pusher 抛出的异常 (例如 'Errno 22')
+                print(f"主循环发生严重错误: {e}")
+                print(f"假定推流器或处理器状态不稳定。正在强制重启推流器...")
+                
+                # 杀死旧的 pusher 进程 (如果它还活着)
+                if pusher_process and pusher_process.poll() is None:
+                    try:
+                        pusher_process.kill() 
+                    except Exception as kill_e:
+                        print(f"尝试杀死旧的 Pusher 失败: {kill_e}")
+                
+                print(f"5秒后重试...")
                 time.sleep(5) 
+
+                # 尝试重新启动推流器
+                try:
+                    pusher_process = start_pusher(rtmp_url)
+                    pusher_stdin = pusher_process.stdin
+                    print("推流器已重新启动，继续主循环。")
+                except Exception as restart_e:
+                    print(f"致命错误：重启推流器失败: {restart_e}")
+                    time.sleep(10) # 避免快速失败循环
 
     except KeyboardInterrupt:
         print("\n检测到 Ctrl+C。正在关闭...")
@@ -615,12 +646,5 @@ if __name__ == "__main__":
     # 确保路径是绝对路径
     path = os.path.abspath(path)
     print(f"使用的工作路径: {path}")
-    
-    # 临时 ASS 文件路径改为工作路径下，以确保跨平台兼容性
-    # (Linux 的 /tmp 路径对 Windows 不友好)
-    if os.name == 'nt': # Windows
-        TEMP_ASS_PATH = os.path.join(path, 'temp.ass')
-    else: # Linux/macOS
-        TEMP_ASS_PATH = "/tmp/temp.ass" 
         
     main()
