@@ -1,3 +1,25 @@
+# From Cathgao:
+
+本项目依赖FFMPEG和[OmniParse](https://github.com/ChuxinNeko/OmniParse) 的API。请将FFMPEG加入到系统path，并按OmniParse的说明添加cookie运行
+
+本项目目前使用的是网易云音乐作为歌曲源，若API账号不是会员，会导致会员专属歌曲无法下载
+
+要填好config.json的配置项
+
+本人Python只是自学的，AI含量高，轻喷🥺
+
+## 我的修改：
+大幅重构代码，以后主要在`push_AB_Windows`分支更新，因为我NAS用的是Windows。只要处理下路径命名几乎能直接用于Linux。原来的master分支可能不再更新
+
+## push_AB 分支
+重构出前端推流后端输出内容的架构，支持不中断RTMP流而更换内容，大幅提高直播体验！
+
+
+
+
+
+# 原仓库内容：
+
 # Music-Live-on-Bilibili
 
 运行于服务器上的Bilibili直播点歌台
