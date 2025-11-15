@@ -24,8 +24,8 @@ try:
     temp_ass_path = os.path.join("R:\\temp\\", 'temp.ass') # 使用工作路径下的临时文件
     temp_path = "R:\\temp\\"
     nightvideo = bool(int(config['nightvideo']['use']))
-    # rtmp_url = rtmp + live_code
-    rtmp_url = "rtmp://192.168.31.217:1935/livehime"
+    rtmp_url = rtmp + live_code
+    # rtmp_url = "rtmp://192.168.31.217:1935/livehime"
 except FileNotFoundError:
     print("错误：Config.json 未找到。请确保配置文件存在。")
     sys.exit(1)
