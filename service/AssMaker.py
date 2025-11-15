@@ -47,6 +47,7 @@ Style: center_down_big,微软雅黑,40,&H00FFFFFF,&H00FFFFFF,&H28D17EF4,&H500E0A
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 Dialogue: 2,0:00:00.00,9:00:00.00,left_down,,0,0,0,,'''+info+'''
 Dialogue: 2,0:00:00.00,9:00:00.00,right_up,,0,0,0,,
+Dialogue: 2,0:00:00.00,9:00:00.00,right_up,,0,0,0,,点歌方式：点歌+【歌名】如“点歌吻别”
 '''+ass+asst+timer_get #44行文字后第3处  \\N  +'点播日期：'+time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(time.time()))+
     file = open(path+'/resource/playlist/'+str(filename)+'.ass','w',encoding='utf-8')    #保存ass字幕文件
     file.write(file_content)
