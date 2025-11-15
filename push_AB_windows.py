@@ -20,10 +20,11 @@ try:
     path = config['path']
     rtmp = config['rtmp']['url']
     live_code = config['rtmp']['code']
+    # 字幕临时文件路径，根据自己实际情况修改。我为了减少磁盘读写使用了内存盘
     temp_ass_path = os.path.join("R:\\temp\\", 'temp.ass') # 使用工作路径下的临时文件
     nightvideo = bool(int(config['nightvideo']['use']))
     rtmp_url = rtmp + live_code
-    # rtmp_url = "rtmp://192.168.3.249:1935/livehime"
+    # rtmp_url = "rtmp://192.168.31.217:1935/livehime"
 except FileNotFoundError:
     print("错误：Config.json 未找到。请确保配置文件存在。")
     sys.exit(1)
@@ -306,7 +307,8 @@ def main():
                         )
                         stream_to_pusher(ffmpeg_cmd, pusher_stdin) # 传入 pusher_stdin
                     continue 
-# --- 播放列表逻辑 ---
+
+                # --- 播放列表逻辑 ---
                 playlist_dir = os.path.join(path, 'resource', 'playlist')
                 
                 # ****** 核心修改开始：增加一个内部循环来持续处理播放列表 ******
@@ -360,22 +362,14 @@ def main():
                     f = selected_file_to_play
                     full_file_path = os.path.join(playlist_dir, f)
 
-                    if count == 1: # 音频文件
-                        # ... (播放列表音频的 FFmpeg 命令构造和 stream_to_pusher 逻辑) ...
-                        
-                        pic_dir = os.path.join(path, 'resource', 'img')
-                        pic_files = os.listdir(pic_dir)
-                        pic_files.sort()
-                        pic_ran = random.randint(0, len(pic_files) - 1)
-                        pic_path = os.path.join(pic_dir, pic_files[pic_ran])
-                        
+                    if count == 1: # 音频文件  
                         base_name = os.path.splitext(f)[0]
                         ass_path = os.path.join(playlist_dir, base_name + '.ass')
-
+                        cover_path = os.path.join(playlist_dir, base_name + '.jpg')
                         ffmpeg_cmd = (
-                            f'ffmpeg -threads 0 -loop 1 -re -r 2 -t {int(seconds)} -f image2 -i "{pic_path}" ' 
-                            f'-i "{full_file_path}" -vf ass=filename="{(ass_path).replace("\\","/").replace(":/","\\\\:/")}" '
-                            f'-pix_fmt yuv420p -b:v {config["rtmp"]["bitrate"]}k -g 4 '
+                            f'ffmpeg -threads 0 -loop 1 -re -r 2 -t {int(seconds)} -f image2 -i "{cover_path}" ' 
+                            f'-i "{full_file_path}" -vf "scale=min(iw\,1920):min(ih\,1080):force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,ass=filename="{(ass_path).replace("\\","/").replace(":/","\\\\:/")}"" '
+                            f'-pix_fmt yuv420p -b:v {config["rtmp"]["bitrate"]}k -g 10 '
                             f'-bsf:v h264_mp4toannexb '
                             f'-vcodec h264_qsv -acodec aac -b:a 320k -f mpegts -'
                         )
@@ -401,7 +395,6 @@ def main():
                         )
                         stream_to_pusher(ffmpeg_cmd, pusher_stdin) 
                         
-                        # 视频文件的处理逻辑保持不变 (重命名后在单独线程中删除)
                         new_name = f.replace("ok", "")
                         os.rename(full_file_path, os.path.join(playlist_dir, new_name))
                         _thread.start_new_thread(remove_v, (new_name,))
@@ -424,7 +417,6 @@ def main():
 
                     # --- 垫片音频 ---
                     if selected_file.endswith(AUDIO_EXTENSIONS):
-                        # ... (文件路径和 ASS 逻辑不变) ...
                         pic_dir = os.path.join(path, 'resource', 'img')
                         pic_files = os.listdir(pic_dir)
                         pic_files.sort()
@@ -451,7 +443,7 @@ def main():
                                     f'-f image2 -i "{pic_path}" -i "{jpg_path}" '
                                     f'-filter_complex "[0:v][1:v]overlay=30:390[cover];[cover]ass=filename="{(ass_path).replace("\\","/").replace(":/","\\\\:/")}" '
                                     f'-i "{full_file_path}" -map "[result]" -map 2:a ' 
-                                    f'-pix_fmt yuv420p -preset fast -maxrate {config["rtmp"]["bitrate"]}k -g 4 '
+                                    f'-pix_fmt yuv420p -preset fast -maxrate {config["rtmp"]["bitrate"]}k -g 10 '
                                     f'-bsf:v h264_mp4toannexb '
                                     f'-acodec aac -b:a 320k -c:v h264_qsv -f mpegts -'
                                 )
@@ -461,7 +453,7 @@ def main():
                                     f'ffmpeg -threads 0 -loop 1 -re -r 2 -t {int(seconds)} ' 
                                     f'-f image2 -i "{pic_path}" -i "{full_file_path}" '
                                     f'-vf ass=filename="{(ass_path).replace("\\","/").replace(":/","\\\\:/")}" '
-                                    f'-b:v {config["rtmp"]["bitrate"]}k -g 4 '
+                                    f'-b:v {config["rtmp"]["bitrate"]}k -g 10 '
                                     f'-pix_fmt yuv420p -preset fast '
                                     f'-bsf:v h264_mp4toannexb '
                                     f'-maxrate {config["rtmp"]["bitrate"]}k -acodec aac -b:a 320k -c:v h264_qsv -f mpegts -'
@@ -475,13 +467,13 @@ def main():
                                 f'ffmpeg -threads 0 -re -loop 1 -r 2 -t {int(seconds)} ' 
                                 f'-f image2 -i "{pic_path}" -i "{full_file_path}" '
                                 f'-vf ass=filename="{convert_ass_path_format(temp_ass_path)}" '
-                                f'-c:v h264_qsv -maxrate {config["rtmp"]["bitrate"]}k -pix_fmt yuv420p -preset fast -g 4 '
+                                f'-c:v h264_qsv -maxrate {config["rtmp"]["bitrate"]}k -pix_fmt yuv420p -preset fast -g 10 '
                                 f'-c:a aac -b:a 320k '
                                 f'-bsf:v h264_mp4toannexb '
                                 f'-f mpegts -' # 输出到标准输出，格式为 flv
                             )
-                            # 注意：此处的 FFmpeg 命令结构似乎有点奇怪，但保留了其核心逻辑
-                            stream_to_pusher(ffmpeg_cmd, pusher_stdin) # 传入 pusher_stdin
+                            # 传入 pusher_stdin
+                            stream_to_pusher(ffmpeg_cmd, pusher_stdin) 
 
                     # --- 垫片视频 (FLV) ---
                     if selected_file.find('.flv') != -1:
