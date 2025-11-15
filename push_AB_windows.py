@@ -12,6 +12,7 @@ import pysubs2
 import subprocess
 import os.path
 import re
+import subprocess
 
 # --- 全局配置 ---
 try:
@@ -19,9 +20,10 @@ try:
     path = config['path']
     rtmp = config['rtmp']['url']
     live_code = config['rtmp']['code']
+    temp_ass_path = os.path.join("R:\\temp\\", 'temp.ass') # 使用工作路径下的临时文件
     nightvideo = bool(int(config['nightvideo']['use']))
-    # rtmp_url = rtmp + live_code
-    rtmp_url = "rtmp://192.168.3.249:1935/livehime"
+    rtmp_url = rtmp + live_code
+    # rtmp_url = "rtmp://192.168.3.249:1935/livehime"
 except FileNotFoundError:
     print("错误：Config.json 未找到。请确保配置文件存在。")
     sys.exit(1)
@@ -199,8 +201,20 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin):
                 # pusher_stdin.flush() # 在许多平台上，写入 PIPE 不需或不应频繁 flush
             except BrokenPipeError:
                 print("错误：管道已损坏。推流器 (进程 1) 可能已崩溃。")
-                process.kill()
-                raise 
+                if process.poll() is None: # 确保 Handler 进程还在运行
+                    try:
+                        print(f"尝试使用 taskkill 强制终止 Handler 进程树 (PID: {process.pid})...")
+                        # /T 终止指定的进程及其由它启动的子进程；/F 强制终止
+                        subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        print("Handler 进程树终止成功。")
+                    except subprocess.CalledProcessError as taskkill_err:
+                        # taskkill 如果进程不存在会报错，可以忽略
+                        print(f"Taskkill 终止失败 (可能已终止): {taskkill_err}")
+                    except FileNotFoundError:
+                        print("Taskkill 命令未找到，无法终止进程树。")
+                # **********************************************
+                
+                raise # 重新抛出异常，让主循环处理 Pusher 重启逻辑
         
         process.wait()
         stderr_output = process.stderr.read().decode('utf-8', errors='ignore')
@@ -232,6 +246,23 @@ def main():
             
         # 2. 启动主循环 (进程 2 的管理器)
         while True:
+            # ****** 循环开始时，检查 Pusher 状态 ******
+            if pusher_process and pusher_process.poll() is not None:
+                # Pusher 已退出，无论什么原因，都需要重新启动
+                print(f"主循环检测到推流器 (进程 1) 已退出 (RC: {pusher_process.returncode})。正在尝试重新启动...")
+                
+                # 尝试重新启动推流器
+                time.sleep(2)
+                pusher_process = start_pusher(rtmp_url)
+                pusher_stdin = pusher_process.stdin
+                print("推流器已重新启动，继续主循环。")
+                
+                # 如果 Handler 正在运行，它将写入一个已经关闭的 PIPE
+                # 并在下一次 stream_to_pusher 调用时，新启动一个 Handler 进程。
+                # 只要 stream_to_pusher 中的 taskkill 逻辑能确保 Handler 退出，这里就没有孤儿进程问题。
+                continue # 跳到循环开始，再次检查播放列表/垫片
+            # **********************************************
+
             try:
                 # --- 夜间模式逻辑 ---
                 if (time.localtime()[3] <= 5) and nightvideo:
@@ -268,93 +299,112 @@ def main():
                             service.AssMaker.make_ass(os.path.join(path, 'night', base_name), '当前是晚间专属时间哦~时间范围：凌晨0-5点\\N大家晚安哦~做个好梦~\\N当前文件名：' + selected_file, path)
                         
                         ffmpeg_cmd = (
-                            f'ffmpeg -threads 1 -loop 1 -r 30 -t {int(seconds)} -f image2 -i "{pic_path}" ' 
-                            f'-i "{full_file_path}" -vf ass=filename="{ass_path}" '
-                            f'-x264-params "profile=high:level=5.1" -pix_fmt yuv420p -b:v {config["rtmp"]["bitrate"]}k '
-                            f'-vcodec libx264 -acodec copy -f flv -' # 输出到标准输出，格式为 flv
+                            f'ffmpeg -threads 0 -loop 1 -r 2 -t {int(seconds)} -f image2 -i "{pic_path}" ' 
+                            f'-i "{full_file_path}" -vf ass=filename="{convert_ass_path_format(ass_path)}" '
+                            f'-pix_fmt yuv420p -b:v {config["rtmp"]["bitrate"]}k -g 10 '
+                            f'-vcodec h264_qsv -acodec aac -b 320k -f mpegts -' # 输出到标准输出，格式为 flv
                         )
                         stream_to_pusher(ffmpeg_cmd, pusher_stdin) # 传入 pusher_stdin
                     continue 
-
-                # --- 播放列表逻辑 ---
+# --- 播放列表逻辑 ---
                 playlist_dir = os.path.join(path, 'resource', 'playlist')
-                files = os.listdir(playlist_dir)
-                files.sort()
-                count = 0
                 
-                for f in files:
-                    full_file_path = os.path.join(playlist_dir, f)
+                # ****** 核心修改开始：增加一个内部循环来持续处理播放列表 ******
+                while True: # 持续检查和播放播放列表中的文件
+                    files = os.listdir(playlist_dir)
+                    files.sort()
+                    count = 0 # 用于标记是否找到了音频/视频文件
+                    selected_file_to_play = None
                     
-                    # --- 播放列表音频 ---
-                    if f.endswith(AUDIO_EXTENSIONS) and (f.find('.download') == -1):
-                        # ... (省略文件检查/删除逻辑) ...
+                    # 遍历查找一个文件来播放
+                    for f in files:
+                        full_file_path = os.path.join(playlist_dir, f)
                         
-                        # (文件选择逻辑...)
-                        seconds = 600
-                        bitrate = 0
-                        try:
-                            audio = mutagen.File(full_file_path)
-                            seconds = audio.info.length
-                            bitrate = audio.info.bitrate
-                        except Exception as e:
-                            print(e)
-                            bitrate = 99999999999
-                        
-                        if (seconds > 600) or (bitrate > 400000):
-                             print('too long/too big,delete')
-                             # ... (删除逻辑) ...
-                        else:
-                            # ... (文件路径和 ASS 逻辑不变) ...
-                            pic_dir = os.path.join(path, 'resource', 'img')
-                            pic_files = os.listdir(pic_dir)
-                            pic_files.sort()
-                            pic_ran = random.randint(0, len(pic_files) - 1)
-                            pic_path = os.path.join(pic_dir, pic_files[pic_ran])
-                            
-                            base_name = os.path.splitext(f)[0]
-                            ass_path = os.path.join(playlist_dir, base_name + '.ass')
-
-                            ffmpeg_cmd = (
-                                f'ffmpeg -threads 1 -loop 1 -r 30 -t {int(seconds)} -f image2 -i "{pic_path}" ' 
-                                f'-i "{full_file_path}" -vf ass=filename="{ass_path}" '
-                                f'-x264-params "profile=high:level=5.1" -pix_fmt yuv420p -b:v {config["rtmp"]["bitrate"]}k '
-                                f'-vcodec libx264 -acodec copy -f flv -' # 输出到标准输出，格式为 flv
-                            )
-                            stream_to_pusher(ffmpeg_cmd, pusher_stdin) # 传入 pusher_stdin
-                            
-                            # ... (文件移动和删除逻辑不变) ...
+                        # --- 播放列表音频 (只播放第一个找到的合格文件) ---
+                        if f.endswith(AUDIO_EXTENSIONS) and (f.find('.download') == -1):
+                            # ... (秒数/码率检查逻辑不变) ...
                             try:
-                                shutil.move(full_file_path, os.path.join(path, 'resource', 'music/'))
-                                shutil.move(ass_path, os.path.join(path, 'resource', 'music/'))
+                                audio = mutagen.File(full_file_path)
+                                seconds = audio.info.length
+                                bitrate = audio.info.bitrate
                             except Exception as e:
                                 print(e)
+                                bitrate = 99999999999                           
+                            if (seconds > 600) or (bitrate > 400000):
+                                print('too long/too big, delete')
+                                try:
+                                    base_name_to_delete = os.path.splitext(f)[0]
+                                    os.remove(os.path.join(playlist_dir, base_name_to_delete + '.info'))
+                                    if os.path.exists(full_file_path): os.remove(full_file_path)
+                                    ass_path_to_delete = os.path.join(playlist_dir, base_name_to_delete + '.ass')
+                                    if os.path.exists(ass_path_to_delete): os.remove(ass_path_to_delete)
+                                except Exception as e:
+                                    print(f'delete error: {e}')
+                                continue # 检查下一个文件
+                            
+                            selected_file_to_play = f
+                            count = 1 # 标记找到了一个音频文件
+                            break # 找到文件后，跳出 for 循环，准备播放
                         
+                        # --- 播放列表视频 (FLV) ---
+                        if (f.find('ok.flv') != -1) and (f.find('.download') == -1) and (f.find('rendering') == -1):
+                            selected_file_to_play = f
+                            count = 2 # 标记找到了一个视频文件
+                            break # 找到文件后，跳出 for 循环，准备播放
+
+                    # 如果没有找到任何可播放的媒体文件，跳出内部循环，进入垫片逻辑
+                    if count == 0:
+                        break # 跳出 while True 内部循环，进入垫片逻辑
+
+                    # --- 播放逻辑 ---
+                    f = selected_file_to_play
+                    full_file_path = os.path.join(playlist_dir, f)
+
+                    if count == 1: # 音频文件
+                        # ... (播放列表音频的 FFmpeg 命令构造和 stream_to_pusher 逻辑) ...
+                        
+                        pic_dir = os.path.join(path, 'resource', 'img')
+                        pic_files = os.listdir(pic_dir)
+                        pic_files.sort()
+                        pic_ran = random.randint(0, len(pic_files) - 1)
+                        pic_path = os.path.join(pic_dir, pic_files[pic_ran])
+                        
+                        base_name = os.path.splitext(f)[0]
+                        ass_path = os.path.join(playlist_dir, base_name + '.ass')
+
+                        ffmpeg_cmd = (
+                            f'ffmpeg -threads 0 -loop 1 -re -r 2 -t {int(seconds)} -f image2 -i "{pic_path}" ' 
+                            f'-i "{full_file_path}" -vf ass=filename="{(ass_path).replace("\\","/").replace(":/","\\\\:/")}" '
+                            f'-pix_fmt yuv420p -b:v {config["rtmp"]["bitrate"]}k -g 4 '
+                            f'-bsf:v h264_mp4toannexb '
+                            f'-vcodec h264_qsv -acodec aac -b:a 320k -f mpegts -'
+                        )
+                        stream_to_pusher(ffmpeg_cmd, pusher_stdin) 
+                        # ****** 播放完后执行删除 ******
                         try:
+                            # 删除 .info 和 .ass 文件
                             base_name = os.path.splitext(f)[0]
                             os.remove(os.path.join(playlist_dir, base_name + '.info'))
-                            if os.path.exists(full_file_path): os.remove(full_file_path)
                             if os.path.exists(ass_path): os.remove(ass_path)
+                            # 删除音频文件本身
+                            if os.path.exists(full_file_path): os.remove(full_file_path)
+                            print(f"成功删除播放列表音频文件: {f}")
                         except Exception as e:
-                            print(f'delete error: {e}')
-                        
-                        count += 1
-                        break 
+                            print(f'delete error after playing: {e}')
 
-                    # --- 播放列表视频 (FLV) ---
-                    if (f.find('ok.flv') != -1) and (f.find('.download') == -1) and (f.find('rendering') == -1):
+                    elif count == 2: # 视频文件 (FLV)
                         print('flv:' + f)
                         
                         ffmpeg_cmd = (
                             f'ffmpeg -threads 1 -i "{full_file_path}" ' 
-                            f'-vcodec copy -acodec copy -f flv -' # 输出到标准输出，格式为 flv
+                            f'-vcodec copy -acodec copy -f flv -'
                         )
-                        stream_to_pusher(ffmpeg_cmd, pusher_stdin) # 传入 pusher_stdin
+                        stream_to_pusher(ffmpeg_cmd, pusher_stdin) 
                         
+                        # 视频文件的处理逻辑保持不变 (重命名后在单独线程中删除)
                         new_name = f.replace("ok", "")
                         os.rename(full_file_path, os.path.join(playlist_dir, new_name))
                         _thread.start_new_thread(remove_v, (new_name,))
-                        count += 1
-                        break 
                 
                 # --- 垫片音乐逻辑 (count == 0) ---
                 if count == 0:
@@ -395,25 +445,30 @@ def main():
                         # (有 ASS/JPG 的复杂逻辑)
                         if os.path.isfile(ass_path):
                             if os.path.isfile(jpg_path):
-                                ass_filter_arg = f"filename='{ass_path}'"
+                                # ass_filter_arg = f"filename='{ass_path}'"
                                 ffmpeg_cmd = (
-                                    f'ffmpeg -threads 0 -loop 1 -r 24 -t {int(seconds)} ' 
+                                    f'ffmpeg -threads 0 -loop 1 -re -r 2 -t {int(seconds)} ' 
                                     f'-f image2 -i "{pic_path}" -i "{jpg_path}" '
-                                    f'-filter_complex "[0:v][1:v]overlay=30:390[cover];[cover]ass={ass_filter_arg}[result]" '
+                                    f'-filter_complex "[0:v][1:v]overlay=30:390[cover];[cover]ass=filename="{(ass_path).replace("\\","/").replace(":/","\\\\:/")}" '
                                     f'-i "{full_file_path}" -map "[result]" -map 2:a ' 
-                                    f'-pix_fmt yuv420p -preset ultrafast -maxrate {config["rtmp"]["bitrate"]}k '
-                                    f'-acodec copy -c:v libx264 -f flv -'
+                                    f'-pix_fmt yuv420p -preset fast -maxrate {config["rtmp"]["bitrate"]}k -g 4 '
+                                    f'-bsf:v h264_mp4toannexb '
+                                    f'-acodec aac -b:a 320k -c:v h264_qsv -f mpegts -'
                                 )
+                                stream_to_pusher(ffmpeg_cmd, pusher_stdin) # 传入 pusher_stdin
                             else:
                                 ffmpeg_cmd = (
-                                    f'ffmpeg -threads 0 -loop 1 -r 30 -t {int(seconds)} ' 
+                                    f'ffmpeg -threads 0 -loop 1 -re -r 2 -t {int(seconds)} ' 
                                     f'-f image2 -i "{pic_path}" -i "{full_file_path}" '
-                                    f'-vf ass=filename="{ass_path}" -pix_fmt yuv420p -preset ultrafast '
-                                    f'-maxrate {config["rtmp"]["bitrate"]}k -acodec copy -c:v libx264 -f flv -'
+                                    f'-vf ass=filename="{(ass_path).replace("\\","/").replace(":/","\\\\:/")}" '
+                                    f'-b:v {config["rtmp"]["bitrate"]}k -g 4 '
+                                    f'-pix_fmt yuv420p -preset fast '
+                                    f'-bsf:v h264_mp4toannexb '
+                                    f'-maxrate {config["rtmp"]["bitrate"]}k -acodec aac -b:a 320k -c:v h264_qsv -f mpegts -'
                                 )
+                                stream_to_pusher(ffmpeg_cmd, pusher_stdin) # 传入 pusher_stdin
                         # (没有 ASS 的简单逻辑)
                         else:
-                            temp_ass_path = os.path.join("R:\\temp\\", 'temp.ass') # 使用工作路径下的临时文件
                             modify_ass_by_title(temp_ass_path, title)
                             
                             ffmpeg_cmd = (
