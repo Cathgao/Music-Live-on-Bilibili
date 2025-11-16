@@ -14,6 +14,10 @@
 		"roomid": "8712608",
 		"size": "20"
 	},
+	"QQmusic":{
+		"use": 0,
+		"cookie": ""
+	},
 	"nightvideo": {
 		"use": "0"
 	}

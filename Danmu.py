@@ -22,6 +22,7 @@ temp_path = "R:\\temp\\"
 roomid = config['danmu']['roomid']
 download_api_url = config['musicapi']
 neteasemusic_api_url = "http://127.0.0.1:4055"
+qqmusic_api_url = "http://127.0.0.1:4055"
 # 切歌标记文件
 skip_flag_file = os.path.join(temp_path, '.skip_current')
 
@@ -167,22 +168,45 @@ async def get_download_url(songid, type, user, songname = "nothing"):
             
             # --- 同步下载函数定义 (使用 to_thread 运行) ---
             def sync_download_id():
-                # 设置 User-Agent
-                # opener=urllib.request.build_opener()
-                # opener.addheaders=[('User-Agent','Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1941.0 Safari/537.36')]
-                # urllib.request.install_opener(opener)
-                api_url = neteasemusic_api_url + "/song"
-                payload = {
-                    "ids" : songid,
-                    "level" : "lossless",
-                    "type" : "json"
-                }
-                response = requests.post(api_url, data=payload)
+
+                if(config["QQmusic"]["use"] == 1):
+                    # QQ音乐的API
+                    api_url = qqmusic_api_url + "/qq/song"
+                    payload = {
+                        "ids" : songid,
+                    }
+                    response = requests.get(api_url, params=payload)
+                else:
+                    # 网易云的API
+                    api_url = neteasemusic_api_url + "/song"
+                    payload = {
+                        "ids" : songid,
+                        "level" : "lossless",
+                        "type" : "json"
+                    }
+                    response = requests.post(api_url, data=payload)
+                
+                
+
                 if response.status_code == 200:
-                    # #获取歌曲信息
-                    song_data = response.json()
-                    song_temp = song_data["name"]
-                    pic_url = song_data["pic"]
+                    #获取歌曲信息
+                    if(config["QQmusic"]["use"] == 1):
+                        # QQ音乐API
+                        song_data = response.json()
+                        song_temp = song_data["song"]["name"]
+                        pic_url = song_data["song"]["pic"]
+                        # 会返回多个URL，音质最高的应该是最后一个
+                        download_url = song_data["music_urls"][list(song_data["music_urls"].keys())[-1]]["url"]
+                        lyric = song_data["lyric"]["lyric"]
+                        tlyric = song_data["lyric"]["tylyric"]
+                    else:
+                        # 网易云API
+                        song_data = response.json()
+                        song_temp = song_data["name"]
+                        pic_url = song_data["pic"]
+                        download_url = song_data["url"]
+                        lyric = song_data["lyric"]
+                        tlyric = song_data["tlyric"]
 
                     #下载专辑封面
                     pic_response = requests.get(pic_url, stream=True, timeout=10)
@@ -204,8 +228,15 @@ async def get_download_url(songid, type, user, songname = "nothing"):
                             pic_response.close()
                     
                     #下载歌曲
-                    download_url = song_data["url"]
-                    response = requests.get(download_url, stream=True, timeout=10)
+                    if(config["QQmusic"]["use"] == 1):
+                        # QQ音乐
+                        header = {
+                            'Cookie':config["QQmusic"]["cookie"]
+                        }
+                        response = requests.get(download_url, stream=True, timeout=10,headers=header)
+                    else:
+                        # 网易云
+                        response = requests.get(download_url, stream=True, timeout=10)
                     try:
                         if response.status_code == 200:
                             _, extension_name = os.path.splitext(os.path.basename(urllib.parse.urlparse(download_url).path).split('?')[0])
@@ -215,9 +246,6 @@ async def get_download_url(songid, type, user, songname = "nothing"):
                                     if chunk: # 过滤掉保持连接的空数据块
                                         f.write(chunk)                    
                             print(f"✅ 文件成功下载并保存到: {f'{path}/resource/playlist/{filename}{extension_name}'}")
-                            # 获取歌词
-                            lyric = song_data["lyric"]
-                            tlyric = song_data["tlyric"]
                             return lyric, tlyric, song_temp
                         else:
                             print(f"❌ 无法获取歌曲信息，HTTP状态码: {response.status_code}")
@@ -235,8 +263,10 @@ async def get_download_url(songid, type, user, songname = "nothing"):
                 return
             
             song = f"歌名：{song_temp}" if song_temp else f"关键词：{songname}"
-
-            service.AssMaker.make_ass(filename, f'当前网易云id：{songid}\\N{song}\\N点播人：{user}', path, lyric, tlyric)
+            if(config["QQmusic"]["use"] == 1):
+                service.AssMaker.make_ass(filename, f'当前QQ音乐id：{songid}\\N{song}\\N点播人：{user}', path, lyric, tlyric)
+            else:
+                service.AssMaker.make_ass(filename, f'当前网易云id：{songid}\\N{song}\\N点播人：{user}', path, lyric, tlyric)
             service.AssMaker.make_info(filename, f'id：{songid},{song},点播人：{user}', path)
             # 第一首点播歌曲直接切
             global first_order
@@ -332,12 +362,18 @@ async def playlist_download(id,user):
 async def search_song(song_name,user):
     print(f'[log] searching song: {song_name}')
     def sync_search():
-        url = neteasemusic_api_url + "/search"
+
         payload = {
             "keywords" : song_name,
             "limit" : 1
         }
-        response = requests.post(url, data=payload)
+        # 判断使用QQ音乐还是网易云
+        if(config["QQmusic"]["use"] == 1):
+            url = qqmusic_api_url + "/qq/search"
+            response = requests.get(url, params=payload)
+        else:
+            url = neteasemusic_api_url + "/search"
+            response = requests.post(url, data=payload)
         if response.status_code == 200:
             search_result = response.json()
             return search_result
@@ -365,19 +401,19 @@ async def search_song(song_name,user):
 class bilibiliClient():
     async def startup(self):
         # 连接直播间并保持连接，直到外部中断
-        # await monitor.connect() 
+        await monitor.connect() 
         # 以下为测试代码
-        commentUser = "TEST3"
-        commentText = "点歌 夜曲"
-        commentUserID = "1341"
-        await danmuji.pick_msg(commentUser, commentUserID, commentText)
+        # commentUser = "TEST3"
+        # commentText = "点歌 稻香"
+        # commentUserID = "1341"
+        # await danmuji.pick_msg(commentUser, commentUserID, commentText)
         
 
     # 优化：send_dm 应该能够发送弹幕，如果不想发送，也应该保持 await 兼容
     async def send_dm(self, Text):
         print(f'[DM_SENT] {Text}')
-        pass # 保持异步兼容
-        # await sender.send_danmaku(Danmaku(Text))
+        # pass # 保持异步兼容
+        await sender.send_danmaku(Danmaku(Text))
 
     async def pick_msg(self, User, UserID, Text):
         global encode_lock
@@ -452,14 +488,14 @@ class bilibiliClient():
                     except Exception as e:
                         print(e)
                     if(songs_count < 10):
-                        await asyncio.sleep(5)
+                        await asyncio.sleep(2)
                         await danmuji.send_dm(all_the_text)
                     songs_count += 1
             if(songs_count == 0):
                 await danmuji.send_dm('当前点播列表为空')
                 return
             if(songs_count <= 10):
-                await asyncio.sleep(5)
+                await asyncio.sleep(2)
                 await danmuji.send_dm('点播列表展示完毕，一共'+str(songs_count)+'个')
             else:
                 await danmuji.send_dm('点播列表前十个展示完毕，一共'+str(songs_count)+'个')
