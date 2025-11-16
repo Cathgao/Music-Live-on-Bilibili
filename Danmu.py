@@ -22,12 +22,15 @@ temp_path = "R:\\temp\\"
 roomid = config['danmu']['roomid']
 download_api_url = config['musicapi']
 neteasemusic_api_url = "http://127.0.0.1:4055"
+# 切歌标记文件
+skip_flag_file = os.path.join(temp_path, '.skip_current')
 
 AUDIO_EXTENSIONS = ('.mp3', '.flac', '.m4a', '.wav', '.ogg', '.aac')
 
 dm_lock = False		 # 弹幕发送锁，用来排队
 encode_lock = False	 # 视频渲染锁，用来排队
 rp_lock = False      # 点播锁定开关
+first_order = False    # 首次点歌标记
 
 # --- 图片处理函数 ---
 def resize_image_to_1080p(image_bytes):
@@ -155,7 +158,7 @@ async def get_download_url(songid, type, user, songname = "nothing"):
         await danmuji.send_dm('Server存储空间已爆炸，请联系up')
         return
 
-    await danmuji.send_dm(f'正在下载 {type}{songid}')
+    # await danmuji.send_dm(f'正在下载 {type}{songid}')
     print(f'[log] getting url: {type}{songid}')
     filename = str(int(time.mktime(datetime.datetime.now().timetuple())))
 
@@ -228,15 +231,27 @@ async def get_download_url(songid, type, user, songname = "nothing"):
             # 使用 asyncio.to_thread 运行阻塞任务
             lyric, tlyric, song_temp = await asyncio.to_thread(sync_download_id)
             if(not song_temp):
-                await danmuji.send_dm('点歌失败：无法下载会员歌曲或其他原因')
+                await danmuji.send_dm('点歌失败')
                 return
             
             song = f"歌名：{song_temp}" if song_temp else f"关键词：{songname}"
 
             service.AssMaker.make_ass(filename, f'当前网易云id：{songid}\\N{song}\\N点播人：{user}', path, lyric, tlyric)
             service.AssMaker.make_info(filename, f'id：{songid},{song},点播人：{user}', path)
-            await danmuji.send_dm(f'{type}{songid} 下载完成，已加入播放队列')
-            print(f'[log] 已添加排队项目：{type}{songid}')
+            # 第一首点播歌曲直接切
+            global first_order
+            if(first_order):
+                first_order = False
+                try:
+                    with open(skip_flag_file, 'w') as f:
+                        f.write('skip')
+                    print(f'[log] 发送切歌信号')
+                    await danmuji.send_dm(f'{type}{songid} 下载完成，准备播放')
+                except Exception as e:
+                    print(f'[log] 切歌信号发送失败: {e}')
+            else:      
+                await danmuji.send_dm(f'{type}{songid} 下载完成，已加入播放队列')
+                print(f'[log] 已添加排队项目：{type}{songid}')
 
         elif type == 'mv':
             def sync_process_mv():
@@ -350,19 +365,19 @@ async def search_song(song_name,user):
 class bilibiliClient():
     async def startup(self):
         # 连接直播间并保持连接，直到外部中断
-        await monitor.connect() 
+        # await monitor.connect() 
         # 以下为测试代码
-        # commentUser = "TEST3"
-        # commentText = "切歌"
-        # commentUserID = "1341"
-        # await danmuji.pick_msg(commentUser, commentUserID, commentText)
+        commentUser = "TEST3"
+        commentText = "点歌 夜曲"
+        commentUserID = "1341"
+        await danmuji.pick_msg(commentUser, commentUserID, commentText)
         
 
     # 优化：send_dm 应该能够发送弹幕，如果不想发送，也应该保持 await 兼容
     async def send_dm(self, Text):
         print(f'[DM_SENT] {Text}')
-        # pass # 保持异步兼容
-        await sender.send_danmaku(Danmaku(Text))
+        pass # 保持异步兼容
+        # await sender.send_danmaku(Danmaku(Text))
 
     async def pick_msg(self, User, UserID, Text):
         global encode_lock
@@ -396,10 +411,26 @@ class bilibiliClient():
         #查找关键词
         keyword = '点歌'
         start_index = Text.find(keyword)
+        is_playlist_empty = True  # 默认播放列表是空的
         # 检查是否找到了 "点歌" 关键词
         if start_index != -1:
             extracted_content = Text[start_index + len(keyword):].strip()
             if extracted_content:
+                # 检查当前有没有点播的歌曲
+                for root, dirs, files in os.walk(f'{path}/resource/playlist'):
+                    for filename in files:
+                        file_extension = os.path.splitext(filename)[1].lower()
+                        if file_extension in AUDIO_EXTENSIONS:
+                            # 找到一个音频文件，说明播放列表不为空
+                            print(f"✅ 播放列表中找到音频文件: {os.path.join(root, filename)}")
+                            is_playlist_empty = False
+                            # 找到后立即退出两层循环，停止文件搜索
+                            break
+                    if not is_playlist_empty:
+                        break # 退出 os.walk 的最外层循环
+                # 设置首次点歌标记
+                global first_order 
+                first_order = is_playlist_empty     
                 # 异步搜索并下载
                 await search_song(extracted_content, User)
             else:
@@ -421,26 +452,26 @@ class bilibiliClient():
                     except Exception as e:
                         print(e)
                     if(songs_count < 10):
-                        time.sleep(5)
+                        await asyncio.sleep(5)
                         await danmuji.send_dm(all_the_text)
                     songs_count += 1
             if(songs_count == 0):
                 await danmuji.send_dm('当前点播列表为空')
                 return
             if(songs_count <= 10):
+                await asyncio.sleep(5)
                 await danmuji.send_dm('点播列表展示完毕，一共'+str(songs_count)+'个')
             else:
                 await danmuji.send_dm('点播列表前十个展示完毕，一共'+str(songs_count)+'个')
         
         if(Text == '切歌' or Text == '下一首'):
-            skip_flag_file = os.path.join(temp_path, '.skip_current')
             try:
                 with open(skip_flag_file, 'w') as f:
                     f.write('skip')
-                await self.send_dm('已切歌，正在播放下一首...')
+                await self.send_dm('已发送切歌信号，请稍后')
                 print(f'[log] 收到切歌命令，已发送切歌信号')
             except Exception as e:
-                await self.send_dm('切歌失败：请重试')
+                await self.send_dm('切歌失败')
                 print(f'[log] 切歌信号发送失败: {e}')
         
         # start_index = Text.find('mvid')
