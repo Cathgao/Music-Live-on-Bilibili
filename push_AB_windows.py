@@ -167,10 +167,10 @@ def start_pusher(rtmp_url):
     # 构造命令字符串，确保 RTMP URL 被引号包裹
     # 添加参数说明：
     # -fflags +igndts: 忽略无效的DTS时间戳（输入选项）
-    # -vsync 0: 不对视频帧时间戳进行重新同步（输出选项）
     # -max_delay 5000000: 最大5秒缓冲，防止音频堆积（输出选项）
     cmd_string = (
-        f'ffmpeg -fflags +igndts -f mpegts -i - -c:a copy -c:v copy -fps_mode passthrough -vsync 0 -max_delay 5000000 -f flv "{clean_rtmp_url}"'
+        f'ffmpeg -fflags +igndts -f mpegts -i - -c:a copy -c:v copy -fps_mode passthrough -vsync 0 -max_delay 5000000 -f flv '
+        f'"{clean_rtmp_url}"'
     )
     
     print(f"--- 启动推流器 (进程 1) ---\n{cmd_string}\n")
@@ -405,10 +405,11 @@ def main():
                         # 为 FFmpeg ass 过滤器转义冒号
                         ass_path_escaped = ass_path_ffmpeg.replace(":", "\\:")
                         ffmpeg_cmd = (
-                            f"ffmpeg -threads 0 -loop 1 -r 2 -t {int(seconds)} -f image2 -i \"{pic_path}\" " 
-                            f"-i \"{full_file_path}\" -vf \"ass='{ass_path_ffmpeg}'\" "
-                            f"-pix_fmt yuv420p -b:v {config['rtmp']['bitrate']}k -g 10 "
-                            f"-vcodec h264_qsv -af aformat=sample_rates=48000 -acodec aac -b:a 320k -f mpegts -"
+                            f"ffmpeg -threads 0 -loop 1 -r 5 -t {int(seconds)} -f image2 -i \"{pic_path}\" " 
+                            f"-i \"{full_file_path}\" -pix_fmt yuv420p -vf \"ass='{ass_path_ffmpeg}'\" "
+                            f"-vcodec h264_qsv -b:v {config['rtmp']['bitrate']}k -g 10 -preset veryslow "
+                            f"-af aformat=sample_rates=48000 -acodec aac -b:a 320k "
+                            f"-f mpegts -"
                         )
                         stream_to_pusher(ffmpeg_cmd, pusher_stdin, skip_flag_file)
                         time.sleep(0.2)  # 切歌后延迟，让 Pusher 完全处理完数据
@@ -461,14 +462,22 @@ def main():
                         base_name = os.path.splitext(f)[0]
                         ass_path = os.path.join(playlist_dir, base_name + '.ass')
                         cover_path = os.path.join(playlist_dir, base_name + '.jpg')
-                        # 构建 ASS 文件路径，转换为 ffmpeg 可识别的格式
-                        ass_path_ffmpeg = ass_path.replace("\\", "/")
-                        # 为 FFmpeg ass 过滤器转义冒号
-                        ass_path_escaped = ass_path_ffmpeg.replace(":", "\\:")
+                        info_path = os.path.join(playlist_dir, base_name + '.info')
+                        # 先检查ASS文件是否存在
+                        if os.path.exists(ass_path):
+                            # 构建 ASS 文件路径，转换为 ffmpeg 可识别的格式
+                            ass_path_ffmpeg = ass_path.replace("\\", "/")
+                            # 为 FFmpeg ass 过滤器转义冒号
+                            ass_path_escaped = ass_path_ffmpeg.replace(":", "\\:")
+                            ass_cmd = f"-vf \"ass='{ass_path_escaped}'\" "
+                        else:
+                            ass_cmd = ""
                         ffmpeg_cmd = (
-                            f"ffmpeg -threads 0 -loop 1 -re -r 2 -t {int(seconds)} -f image2 -i \"{cover_path}\" " 
-                            f"-i \"{full_file_path}\" -vf \"ass='{ass_path_escaped}'\" "
+                            f"ffmpeg -threads 0 -loop 1 -re -r 5 -t {int(seconds)} -f image2 -i \"{cover_path}\" " 
+                            f"-i \"{full_file_path}\" "
+                            f"{ass_cmd}"
                             f"-pix_fmt yuv420p -b:v {config['rtmp']['bitrate']}k -g 10 "
+                            f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                             f"-bsf:v h264_mp4toannexb "
                             f"-vcodec h264_qsv -af aformat=sample_rates=48000 -acodec aac -b:a 320k -f mpegts -"
                         )
@@ -477,8 +486,7 @@ def main():
                         # ****** 播放完后执行删除 ******
                         try:
                             # 删除 .info 和 .ass 和 .jpg文件
-                            base_name = os.path.splitext(f)[0]
-                            os.remove(os.path.join(playlist_dir, base_name + '.info'))
+                            if os.path.exists(info_path): os.remove(info_path)
                             if os.path.exists(ass_path): os.remove(ass_path)
                             if os.path.exists(cover_path): os.remove(cover_path)
                             # 删除音频文件本身
@@ -543,11 +551,12 @@ def main():
                             if os.path.isfile(jpg_path):
                                 # ass_filter_arg = f"filename='{ass_path}'"
                                 ffmpeg_cmd = (
-                                    f"ffmpeg -threads 0 -loop 1 -re -r 2 -t {int(seconds)} " 
+                                    f"ffmpeg -threads 0 -loop 1 -re -r 5 -t {int(seconds)} " 
                                     f"-f image2 -i \"{pic_path}\" -i \"{jpg_path}\" "
                                     f"-filter_complex \"[0:v][1:v]overlay=30:390[cover];[cover]ass='{ass_path_escaped}'\" "
                                     f"-i \"{full_file_path}\" -map \"[cover]\" -map 2:a " 
-                                    f"-pix_fmt yuv420p -preset fast -maxrate {config['rtmp']['bitrate']}k -g 10 "
+                                    f"-pix_fmt yuv420p -preset veryslow -b:v {config['rtmp']['bitrate']}k -maxrate {config['rtmp']['bitrate']}k -g 10 "
+                                    f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                                     f"-bsf:v h264_mp4toannexb "
                                     f"-af aformat=sample_rates=48000 -acodec aac -b:a 320k -c:v h264_qsv -f mpegts -"
                                 )
@@ -555,10 +564,11 @@ def main():
                                 time.sleep(0.2)  # 切歌后延迟
                             else:
                                 ffmpeg_cmd = (
-                                    f"ffmpeg -threads 0 -loop 1 -re -r 2 -t {int(seconds)} " 
+                                    f"ffmpeg -threads 0 -loop 1 -re -r 5 -t {int(seconds)} " 
                                     f"-f image2 -i \"{pic_path}\" -i \"{full_file_path}\" "
                                     f"-vf \"ass='{ass_path_escaped}'\" "
-                                    f"-pix_fmt yuv420p -b:v {config['rtmp']['bitrate']}k -preset fast -g 10 "
+                                    f"-pix_fmt yuv420p -b:v {config['rtmp']['bitrate']}k -preset veryslow -g 10 "
+                                    f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                                     f"-bsf:v h264_mp4toannexb "
                                     f"-af aformat=sample_rates=48000 -acodec aac -b:a 320k -c:v h264_qsv -f mpegts -"
                                 )
@@ -571,10 +581,11 @@ def main():
                             temp_ass_path_escaped = temp_ass_path_ffmpeg.replace(":", "\\:")
                             
                             ffmpeg_cmd = (
-                                f"ffmpeg -threads 0 -re -loop 1 -r 2 -t {int(seconds)} " 
+                                f"ffmpeg -threads 0 -re -loop 1 -r 5 -t {int(seconds)} " 
                                 f"-f image2 -i \"{pic_path}\" -i \"{full_file_path}\" "
                                 f"-vf \"ass='{temp_ass_path_escaped}'\" " 
-                                f"-pix_fmt yuv420p -c:v h264_qsv -maxrate {config['rtmp']['bitrate']}k -preset fast -g 10 "
+                                f"-pix_fmt yuv420p -c:v h264_qsv -b:v {config['rtmp']['bitrate']}k -maxrate {config['rtmp']['bitrate']}k -preset veryslow -g 10 "
+                                f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                                 f"-af aformat=sample_rates=48000 -c:a aac -b:a 320k "
                                 f"-bsf:v h264_mp4toannexb "
                                 f"-f mpegts -"
