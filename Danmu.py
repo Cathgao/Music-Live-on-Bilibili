@@ -151,7 +151,7 @@ def clean_files():
 
 # --- 核心异步函数：下载和渲染优化 ---
 
-async def get_download_url(songid, type, user, songname = "nothing"):
+async def get_download_url(songid, type, user, userID, songname = "nothing"):
     global encode_lock
     
     # 检查空间（同步操作，但速度快，可直接调用）
@@ -267,7 +267,7 @@ async def get_download_url(songid, type, user, songname = "nothing"):
                 service.AssMaker.make_ass(filename, f'当前QQ音乐id：{songid}\\N{song}\\N点播人：{user}', path, lyric, tlyric)
             else:
                 service.AssMaker.make_ass(filename, f'当前网易云id：{songid}\\N{song}\\N点播人：{user}', path, lyric, tlyric)
-            service.AssMaker.make_info(filename, f'id：{songid},{song},点播人：{user}', path)
+            service.AssMaker.make_info(filename, f'id：{songid},{song},点播人：{user}', userID, path)
             # 第一首点播歌曲直接切
             global first_order
             if(first_order):
@@ -359,10 +359,9 @@ async def playlist_download(id,user):
         asyncio.create_task(song['id'], 'id', user, song['name'])
 
 # 搜索歌曲并下载
-async def search_song(song_name,user):
+async def search_song(song_name,user,userID):
     print(f'[log] searching song: {song_name}')
     def sync_search():
-
         payload = {
             "keywords" : song_name,
             "limit" : 1
@@ -379,7 +378,6 @@ async def search_song(song_name,user):
             return search_result
         else:
             return {"result": None}
-
     try:
         search_result = await asyncio.to_thread(sync_search) # 在线程池中获取搜索结果
         
@@ -391,7 +389,7 @@ async def search_song(song_name,user):
         result_id = search_result["result"][0]["id"]
         
         # 启动下载
-        await get_download_url(result_id, 'id', user, song_name)
+        await get_download_url(result_id, 'id', user, userID, song_name)
         
     except Exception as e:
         await danmuji.send_dm(f'搜索歌曲 {song_name} 时发生错误')
@@ -416,6 +414,35 @@ class bilibiliClient():
         await sender.send_danmaku(Danmaku(Text))
 
     async def pick_msg(self, User, UserID, Text):
+        
+          # 获取第一个音频文件的信息
+        def sync_get_current_song_info():
+                files = os.listdir(f'{path}/resource/playlist')
+                files.sort()  # 按文件名（下载时间）排序
+                current_audio_file = None
+                for f in files:
+                    # 找到第一个符合音频扩展名且不是正在下载的临时文件的文件
+                    if f.endswith(AUDIO_EXTENSIONS) and (f.find('.download') == -1):
+                        current_audio_file = f
+                        break
+                if current_audio_file:
+                    try:
+                        base_name, _ = os.path.splitext(current_audio_file)
+                        info_file_path = f'{path}/resource/playlist/{base_name}.info'
+                        with open(info_file_path, 'r', encoding='utf-8') as info_file:
+                            # 只获取第二行
+                            info_file.readline()
+                            requester_id = info_file.readline().strip()
+                            return requester_id
+                    except FileNotFoundError:
+                        print(f"⚠️ 找不到对应的 .info 文件: {info_file_path}")
+                        return ""
+                    except Exception as e:
+                        print(f"❌ 读取 .info 文件出错: {e}")
+                        return ""
+                else:
+                    return "" # 播放列表为空
+
         global encode_lock
         global rp_lock
         # 管理员命令 (UserID='1762226' 是示例，请替换为实际管理员ID)
@@ -468,7 +495,7 @@ class bilibiliClient():
                 global first_order 
                 first_order = is_playlist_empty     
                 # 异步搜索并下载
-                await search_song(extracted_content, User)
+                await search_song(extracted_content, User, UserID)
             else:
                 await self.send_dm('点歌格式：点歌 [歌曲名]')
 
@@ -483,7 +510,7 @@ class bilibiliClient():
                     try:
                         base_name, _ = os.path.splitext(f) 
                         info_file = open(f'{path}/resource/playlist/{base_name}.info', 'r' ,encoding='utf-8') 
-                        all_the_text = info_file.read()
+                        all_the_text = info_file.readline().strip()
                         info_file.close()
                     except Exception as e:
                         print(e)
@@ -501,14 +528,18 @@ class bilibiliClient():
                 await danmuji.send_dm('点播列表前十个展示完毕，一共'+str(songs_count)+'个')
         
         if(Text == '切歌' or Text == '下一首'):
-            try:
-                with open(skip_flag_file, 'w') as f:
-                    f.write('skip')
-                await self.send_dm('已发送切歌信号，请稍后')
-                print(f'[log] 收到切歌命令，已发送切歌信号')
-            except Exception as e:
-                await self.send_dm('切歌失败')
-                print(f'[log] 切歌信号发送失败: {e}')
+            current_song_id = sync_get_current_song_info()
+            if(current_song_id == UserID) or (current_song_id == ""):
+                try:
+                    with open(skip_flag_file, 'w') as f:
+                        f.write('skip')
+                    await self.send_dm('已发送切歌信号，请稍后')
+                    print(f'[log] 收到切歌命令，已发送切歌信号')
+                except Exception as e:
+                    await self.send_dm('切歌失败')
+                    print(f'[log] 切歌信号发送失败: {e}')
+            else:
+                await self.send_dm('不是你点的歌')
         
         # start_index = Text.find('mvid')
         # if start_index != -1:

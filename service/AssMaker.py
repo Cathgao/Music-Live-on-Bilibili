@@ -54,8 +54,8 @@ Dialogue: 2,0:00:00.00,9:00:00.00,right_up,,0,0,0,,点歌方式：点歌+【歌�
     file.close()
 
 #生成info文件
-def make_info(filename, info, path):
-    file_content = info
+def make_info(filename, info, userID, path):
+    file_content = f"{info}\n{userID}"
     file = open(path+'/resource/playlist/'+str(filename)+'.info','w',encoding='utf-8')
     file.write(file_content)
     file.close()
