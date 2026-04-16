@@ -12,7 +12,6 @@ import pysubs2
 import subprocess
 import os.path
 import re
-import subprocess
 import audioread
 
 # --- 全局配置 ---
@@ -84,15 +83,6 @@ def modify_ass_by_title(output_path, new_text):
         subs.save(output_path)
         print(f"修改后的 ASS 文件已保存到：{output_path}")
     except FileNotFoundError:
-        # [修复] 即使 default.ass 找不到，也创建一个空的 ass 文件并添加标题
-        # 这样可以避免 ffmpeg 因为 ass 文件不存在而报错
-        print(f"警告：找不到文件 {default_ass_path}。将创建仅含标题的 ASS 文件。")
-        subs = pysubs2.SSAFile()
-        subs.styles['Title'] = pysubs2.SSAStyle(fontname='Arial', fontsize=24, primarycolor=pysubs2.Color(255,255,255))
-        new_line = pysubs2.SSAEvent(layer=2, start=0, end=3600000, text=new_text, style='Title')
-        subs.append(new_line)
-        subs.save(output_path)
-        print(f"已创建仅含标题的 ASS 文件到：{output_path}")
         # [修复] 即使 default.ass 找不到，也创建一个空的 ass 文件并添加标题
         # 这样可以避免 ffmpeg 因为 ass 文件不存在而报错
         print(f"警告：找不到文件 {default_ass_path}。将创建仅含标题的 ASS 文件。")
@@ -220,8 +210,6 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
     进程 2：处理器。
     ...
     [修复] 使用 taskkill /T /F 确保 ffmpeg.exe 子进程被杀死，防止泄露
-    ...
-    [修复] 使用 taskkill /T /F 确保 ffmpeg.exe 子进程被杀死，防止泄露
     """
     print(f"--- 启动处理器 (进程 2) ---\n{ffmpeg_command}\n")
     process = None
@@ -251,29 +239,6 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
                     pass # 忽略错误
 
     
-    def force_kill_handler(proc, reason=""):
-        """
-        [新] 辅助函数，用于强制杀死进程树 (cmd.exe 和 ffmpeg.exe)。
-        """
-        if proc and proc.poll() is None:
-            pid = proc.pid
-            print(f"Handler 进程 {pid} {reason}，强制终止进程树...")
-            try:
-                # /T 终止指定的进程和由它启动的任何子进程。
-                # /F 强制终止进程。
-                kill_cmd = f"taskkill /F /T /PID {pid}"
-                print(f"执行: {kill_cmd}")
-                subprocess.run(kill_cmd, check=True, shell=True, capture_output=True, text=True)
-                print(f"成功终止进程树 (PID: {pid})。")
-            except Exception as kill_e:
-                print(f"使用 taskkill 终止进程树 (PID: {pid}) 失败: {kill_e}")
-                # 降级：尝试旧的 kill 方法
-                try:
-                    if proc.poll() is None:
-                        proc.kill()
-                except Exception:
-                    pass # 忽略错误
-
     try:
         # 清空旧的 skip 标志文件（如果存在）
         if os.path.exists(skip_flag_file):
@@ -282,7 +247,6 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
             except Exception:
                 pass
         
-        # 打开 Handler 的 stdin，以便发送 'q' 命令优雅地停止它
         # 打开 Handler 的 stdin，以便发送 'q' 命令优雅地停止它
         process = subprocess.Popen(ffmpeg_command, shell=True, stdin=subprocess.PIPE, 
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -293,7 +257,6 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
         
         skip_requested = False
         while True:
-            # 检查切歌标志文件
             # 检查切歌标志文件
             if os.path.exists(skip_flag_file) and not skip_requested:
                 print("[切歌] 检测到切歌信号，正在发送优雅停止命令给 Handler...")
@@ -315,13 +278,8 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
                 except Exception:
                     pass
             
-            data = process.stdout.read(65536) 
+            data = process.stdout.read(65536)
             if not data:
-                if skip_requested:
-                    print("[切歌] Handler 已完成优雅停止。")
-                else:
-                    print("Handler 已完成正常播放。")
-                break # 正常结束或 'q' 结束
                 if skip_requested:
                     print("[切歌] Handler 已完成优雅停止。")
                 else:
@@ -344,19 +302,12 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
                         process.wait(timeout=2)
                     except: # 捕获超时或写入错误
                         force_kill_handler(process, "在 BrokenPipeError 后未在2秒内响应 'q'")
-                raise # 重新抛出异常，让 main 循环知道
-        
-        # 确保 Handler 进程正常退出 (处理正常播放结束的情况)
-                    except: # 捕获超时或写入错误
-                        force_kill_handler(process, "在 BrokenPipeError 后未在2秒内响应 'q'")
-                raise # 重新抛出异常，让 main 循环知道
-        
+                raise # 重新抛出异常，让 main 循环知道       
         # 确保 Handler 进程正常退出 (处理正常播放结束的情况)
         if process.poll() is None:
             try:
                 process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                force_kill_handler(process, "播放结束但未在3秒内退出")
                 force_kill_handler(process, "播放结束但未在3秒内退出")
         
         stderr_output = process.stderr.read().decode('utf-8', errors='ignore')
@@ -371,11 +322,6 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
         # 捕获所有其他异常 (包括 BrokenPipeError)
         if not isinstance(e, BrokenPipeError):
              print(f"stream_to_pusher 发生严重错误: {e}")
-             
-        # 捕获所有其他异常 (包括 BrokenPipeError)
-        if not isinstance(e, BrokenPipeError):
-             print(f"stream_to_pusher 发生严重错误: {e}")
-             
         if process and process.poll() is None:
             try:
                 if handler_stdin:
@@ -383,8 +329,6 @@ def stream_to_pusher(ffmpeg_command, pusher_stdin, skip_flag_file):
                     handler_stdin.flush()
                 process.wait(timeout=2)
             except:
-                force_kill_handler(process, "在严重错误后未在2秒内响应 'q'")
-        raise # 重新抛出异常，让 main 循环处理
                 force_kill_handler(process, "在严重错误后未在2秒内响应 'q'")
         raise # 重新抛出异常，让 main 循环处理
     finally:
@@ -468,11 +412,6 @@ def main():
                             f"-vcodec h264_qsv -b:v {config['rtmp']['bitrate']}k -g 10 -preset veryslow "
                             f"-af aformat=sample_rates=48000 -acodec aac -b:a 320k "
                             f"-f mpegts -"
-                            f"ffmpeg -threads 0 -loop 1 -r 5 -t {int(seconds)} -f image2 -i \"{pic_path}\" " 
-                            f"-i \"{full_file_path}\" -pix_fmt yuv420p -vf \"ass='{ass_path_ffmpeg}'\" "
-                            f"-vcodec h264_qsv -b:v {config['rtmp']['bitrate']}k -g 10 -preset veryslow "
-                            f"-af aformat=sample_rates=48000 -acodec aac -b:a 320k "
-                            f"-f mpegts -"
                         )
                         stream_to_pusher(ffmpeg_cmd, pusher_stdin, skip_flag_file)
                         time.sleep(0.2)  # 切歌后延迟，让 Pusher 完全处理完数据
@@ -535,25 +474,11 @@ def main():
                             ass_cmd = f"-vf \"ass='{ass_path_escaped}'\" "
                         else:
                             ass_cmd = ""
-                        info_path = os.path.join(playlist_dir, base_name + '.info')
-                        # 先检查ASS文件是否存在
-                        if os.path.exists(ass_path):
-                            # 构建 ASS 文件路径，转换为 ffmpeg 可识别的格式
-                            ass_path_ffmpeg = ass_path.replace("\\", "/")
-                            # 为 FFmpeg ass 过滤器转义冒号
-                            ass_path_escaped = ass_path_ffmpeg.replace(":", "\\:")
-                            ass_cmd = f"-vf \"ass='{ass_path_escaped}'\" "
-                        else:
-                            ass_cmd = ""
                         ffmpeg_cmd = (
                             f"ffmpeg -threads 0 -loop 1 -re -r 5 -t {int(seconds)} -f image2 -i \"{cover_path}\" " 
                             f"-i \"{full_file_path}\" "
                             f"{ass_cmd}"
-                            f"ffmpeg -threads 0 -loop 1 -re -r 5 -t {int(seconds)} -f image2 -i \"{cover_path}\" " 
-                            f"-i \"{full_file_path}\" "
-                            f"{ass_cmd}"
                             f"-pix_fmt yuv420p -b:v {config['rtmp']['bitrate']}k -g 10 "
-                            f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                             f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                             f"-bsf:v h264_mp4toannexb "
                             f"-vcodec h264_qsv -af aformat=sample_rates=48000 -acodec aac -b:a 320k -f mpegts -"
@@ -563,7 +488,6 @@ def main():
                         # ****** 播放完后执行删除 ******
                         try:
                             # 删除 .info 和 .ass 和 .jpg文件
-                            if os.path.exists(info_path): os.remove(info_path)
                             if os.path.exists(info_path): os.remove(info_path)
                             if os.path.exists(ass_path): os.remove(ass_path)
                             if os.path.exists(cover_path): os.remove(cover_path)
@@ -630,12 +554,9 @@ def main():
                                 # ass_filter_arg = f"filename='{ass_path}'"
                                 ffmpeg_cmd = (
                                     f"ffmpeg -threads 0 -loop 1 -re -r 5 -t {int(seconds)} " 
-                                    f"ffmpeg -threads 0 -loop 1 -re -r 5 -t {int(seconds)} " 
                                     f"-f image2 -i \"{pic_path}\" -i \"{jpg_path}\" "
                                     f"-filter_complex \"[0:v][1:v]overlay=30:390[cover];[cover]ass='{ass_path_escaped}'\" "
                                     f"-i \"{full_file_path}\" -map \"[cover]\" -map 2:a " 
-                                    f"-pix_fmt yuv420p -preset veryslow -b:v {config['rtmp']['bitrate']}k -maxrate {config['rtmp']['bitrate']}k -g 10 "
-                                    f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                                     f"-pix_fmt yuv420p -preset veryslow -b:v {config['rtmp']['bitrate']}k -maxrate {config['rtmp']['bitrate']}k -g 10 "
                                     f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                                     f"-bsf:v h264_mp4toannexb "
@@ -646,11 +567,8 @@ def main():
                             else:
                                 ffmpeg_cmd = (
                                     f"ffmpeg -threads 0 -loop 1 -re -r 5 -t {int(seconds)} " 
-                                    f"ffmpeg -threads 0 -loop 1 -re -r 5 -t {int(seconds)} " 
                                     f"-f image2 -i \"{pic_path}\" -i \"{full_file_path}\" "
                                     f"-vf \"ass='{ass_path_escaped}'\" "
-                                    f"-pix_fmt yuv420p -b:v {config['rtmp']['bitrate']}k -preset veryslow -g 10 "
-                                    f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                                     f"-pix_fmt yuv420p -b:v {config['rtmp']['bitrate']}k -preset veryslow -g 10 "
                                     f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                                     f"-bsf:v h264_mp4toannexb "
@@ -666,16 +584,12 @@ def main():
                             
                             ffmpeg_cmd = (
                                 f"ffmpeg -threads 0 -re -loop 1 -r 5 -t {int(seconds)} " 
-                                f"ffmpeg -threads 0 -re -loop 1 -r 5 -t {int(seconds)} " 
                                 f"-f image2 -i \"{pic_path}\" -i \"{full_file_path}\" "
                                 f"-vf \"ass='{temp_ass_path_escaped}'\" " 
                                 f"-pix_fmt yuv420p -c:v h264_qsv -b:v {config['rtmp']['bitrate']}k -maxrate {config['rtmp']['bitrate']}k -preset veryslow -g 10 "
                                 f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
-                                f"-pix_fmt yuv420p -c:v h264_qsv -b:v {config['rtmp']['bitrate']}k -maxrate {config['rtmp']['bitrate']}k -preset veryslow -g 10 "
-                                f'-bufsize {int(config['rtmp']['bitrate']) * 2}k '
                                 f"-af aformat=sample_rates=48000 -c:a aac -b:a 320k "
                                 f"-bsf:v h264_mp4toannexb "
-                                f"-f mpegts -"
                                 f"-f mpegts -"
                             )
                             stream_to_pusher(ffmpeg_cmd, pusher_stdin, skip_flag_file)
@@ -714,28 +628,7 @@ def main():
                         print(f"尝试杀死旧的 Pusher 失败: {kill_e}")
                 
                 print(f"5秒后重试...")
-                # 捕获所有其他从 stream_to_pusher 抛出的异常 (例如 'Errno 22')
-                print(f"主循环发生严重错误: {e}")
-                print(f"假定推流器或处理器状态不稳定。正在强制重启推流器...")
-                
-                # 杀死旧的 pusher 进程 (如果它还活着)
-                if pusher_process and pusher_process.poll() is None:
-                    try:
-                        pusher_process.kill() 
-                    except Exception as kill_e:
-                        print(f"尝试杀死旧的 Pusher 失败: {kill_e}")
-                
-                print(f"5秒后重试...")
                 time.sleep(5) 
-
-                # 尝试重新启动推流器
-                try:
-                    pusher_process = start_pusher(rtmp_url)
-                    pusher_stdin = pusher_process.stdin
-                    print("推流器已重新启动，继续主循环。")
-                except Exception as restart_e:
-                    print(f"致命错误：重启推流器失败: {restart_e}")
-                    time.sleep(10) # 避免快速失败循环
 
                 # 尝试重新启动推流器
                 try:
