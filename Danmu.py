@@ -481,6 +481,7 @@ class bilibiliClient():
             extracted_content = Text[start_index + len(keyword):].strip()
             if extracted_content:
                 # 检查当前有没有点播的歌曲
+                is_playlist_empty = True  # 假设播放列表为空
                 for root, dirs, files in os.walk(f'{path}/resource/playlist'):
                     for filename in files:
                         file_extension = os.path.splitext(filename)[1].lower()
