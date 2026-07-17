@@ -18,11 +18,15 @@ _admin_config = config.get('admin', {}).get('ids', ['1762226'])
 if isinstance(_admin_config, (str, int)):
     _admin_config = [_admin_config]
 admin_ids = {str(admin_id).strip() for admin_id in _admin_config if str(admin_id).strip()}
+if not admin_ids:
+    admin_ids = {'1762226'}
 
 credential = Credential(sessdata=config["danmu"]["SESSDATA"], bili_jct=config["danmu"]["bili_jct"], buvid3=config["danmu"]["buvid3"], ac_time_value=config["danmu"]["ac_time_value"])
 monitor  = LiveDanmaku(int(config['danmu']['roomid']), credential=credential)
 sender = LiveRoom(int(config['danmu']['roomid']), credential=credential)
 path = config['path']
+# Linux: 优先使用 /dev/shm(tmpfs) 作为临时目录,与 push_AB_linux.py 保持一致
+# 若 /dev/shm 不存在(部分容器环境),降级到 <项目>/temp/
 _tmp_default = "/dev/shm/Music-Live-on-Bilibili-temp/"
 try:
     os.makedirs(_tmp_default, exist_ok=True)
@@ -626,24 +630,31 @@ class bilibiliClient():
         if rp_lock:
             return # 如果锁定，则不响应普通弹幕
         if((Text == '点播列表') or (Text == '歌曲列表') or (Text == '点歌列表')):
-            await danmuji.send_dm('已收到'+User+'的指令，正在查询')
+            # await danmuji.send_dm('已收到'+User+'的指令，正在查询')
             files = os.listdir(path+'/resource/playlist')   #获取目录下所有文件
             files.sort()    #按文件名（下载时间）排序
             songs_count = 0 #项目数量
             all_the_text = ""
             for f in files:
-                if((f.endswith(AUDIO_EXTENSIONS)) and (f.find('.download') == -1)): 
+                if((f.endswith(AUDIO_EXTENSIONS)) and (f.find('.download') == -1)):
+                    song_name_text = ''
                     try:
-                        base_name, _ = os.path.splitext(f) 
-                        info_file = open(f'{path}/resource/playlist/{base_name}.info', 'r' ,encoding='utf-8') 
-                        all_the_text = info_file.readline().strip()
-                        all_the_text = info_file.readline().strip()
-                        info_file.close()
+                        base_name, _ = os.path.splitext(f)
+                        with open(f'{path}/resource/playlist/{base_name}.info', 'r', encoding='utf-8') as info_file_2:
+                            first_line = info_file_2.readline()
+                        if '歌名：' in first_line:
+                            song_part = first_line.split('歌名：', 1)[1]
+                            song_name = song_part.split(' / ', 1)[0].strip()
+                            artist_text = ''
+                            if ' / 歌手：' in song_part:
+                                artist_text = song_part.split(' / 歌手：', 1)[1].split('，', 1)[0].strip()
+                            song_name_text = f'{song_name} - {artist_text}' if artist_text else song_name
+                            song_name_text = song_name_text[:37]
                     except Exception as e:
                         print(e)
                     if(songs_count < 10):
                         await asyncio.sleep(2)
-                        await danmuji.send_dm(all_the_text)
+                        await danmuji.send_dm(song_name_text or '(未知歌曲)')
                     songs_count += 1
             if(songs_count == 0):
                 await danmuji.send_dm('当前点播列表为空')
