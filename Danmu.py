@@ -58,6 +58,12 @@ first_order = False    # 首次点歌标记
 self_uid = ''         # 当前登录账号 UID，由直播连接后自动获取
 pending_song_choices = {}  # userID -> {'songs': list, 'event': asyncio.Event, 'choice': int}
 
+# --- 点歌节流 ---
+# 音乐搜索 API 有至少 2 秒的搜索间隔，间隔内再次请求会返回空结果而不报错。
+# 因此两次点歌的间隔必须 >= 3 秒，无论是谁的；其他命令不受影响。
+SEARCH_COOLDOWN_SECONDS = 3
+_last_order_ts = 0.0  # 上次点歌时间 (time.monotonic)
+
 # --- 图片处理函数 ---
 def resize_image_to_1080p(image_bytes):
     """
@@ -441,8 +447,7 @@ async def search_song(song_name,user,userID):
                 'types': 'search',
                 'source': music_api_source,
                 'name': song_name,
-                'count': 3,
-                'pages': 1
+                'count': 4
             },
             headers=music_api_headers,
             timeout=10
@@ -454,7 +459,7 @@ async def search_song(song_name,user,userID):
             response.close()
         if not isinstance(search_result, list):
             raise ValueError('音乐搜索 API 返回格式异常')
-        return search_result[:3]
+        return search_result[:4]
 
     try:
         search_result = await asyncio.to_thread(sync_search)
@@ -476,7 +481,7 @@ async def search_song(song_name,user,userID):
             }
             pending_song_choices[str(userID)] = choice_session
 
-            await danmuji.send_dm('你要点哪首？回复1-3选择 30秒后自动选择第1首')
+            await danmuji.send_dm('你要点哪首？回复1-4选择 30秒后自动选择第1首')
             await asyncio.sleep(2)
             for index, song in enumerate(valid_results, 1):
                 artists = song.get('artist') or []
@@ -620,36 +625,7 @@ class bilibiliClient():
         # 点播功能检查
         if rp_lock:
             return # 如果锁定，则不响应普通弹幕
-        
-        #查找关键词
-        keyword = '点歌'
-        start_index = Text.find(keyword)
-        # 检查是否找到了 "点歌" 关键词
-        if start_index != -1:
-            extracted_content = Text[start_index + len(keyword):].strip()
-            if extracted_content:
-                # 检查当前有没有点播的歌曲
-                is_playlist_empty = True  # 假设播放列表为空
-                for root, dirs, files in os.walk(f'{path}/resource/playlist'):
-                    for filename in files:
-                        file_extension = os.path.splitext(filename)[1].lower()
-                        if file_extension in AUDIO_EXTENSIONS:
-                            # 找到一个音频文件，说明播放列表不为空
-                            print(f"✅ 播放列表中找到音频文件: {os.path.join(root, filename)}")
-                            is_playlist_empty = False
-                            # 找到后立即退出两层循环，停止文件搜索
-                            break
-                    if not is_playlist_empty:
-                        break # 退出 os.walk 的最外层循环
-                # 设置首次点歌标记
-                global first_order
-                first_order = is_playlist_empty
-                # 异步搜索并下载
-                await search_song(extracted_content, User, UserID)
-            else:
-                await self.send_dm('点歌格式：点歌 [歌曲名]')
-
-        if((Text == '点播列表') or (Text == '歌曲列表')):
+        if((Text == '点播列表') or (Text == '歌曲列表') or (Text == '点歌列表')):
             await danmuji.send_dm('已收到'+User+'的指令，正在查询')
             files = os.listdir(path+'/resource/playlist')   #获取目录下所有文件
             files.sort()    #按文件名（下载时间）排序
@@ -677,7 +653,38 @@ class bilibiliClient():
                 await danmuji.send_dm('点播列表展示完毕，一共'+str(songs_count)+'个')
             else:
                 await danmuji.send_dm('点播列表前十个展示完毕，一共'+str(songs_count)+'个')
-        
+
+        keyword = '点歌'
+        if Text.startswith(keyword) and Text != '点歌列表':
+            # 全局节流：上次点歌之后 3 秒内，所有用户的点歌请求一律忽略。
+            global _last_order_ts
+            now = time.monotonic()
+            if _last_order_ts and (now - _last_order_ts) < SEARCH_COOLDOWN_SECONDS:
+                return
+            extracted_content = Text[len(keyword):].strip()
+            if extracted_content:
+                _last_order_ts = time.monotonic()
+                # 检查当前有没有点播的歌曲
+                is_playlist_empty = True  # 假设播放列表为空
+                for root, dirs, files in os.walk(f'{path}/resource/playlist'):
+                    for filename in files:
+                        file_extension = os.path.splitext(filename)[1].lower()
+                        if file_extension in AUDIO_EXTENSIONS:
+                            # 找到一个音频文件，说明播放列表不为空
+                            print(f"✅ 播放列表中找到音频文件: {os.path.join(root, filename)}")
+                            is_playlist_empty = False
+                            # 找到后立即退出两层循环，停止文件搜索
+                            break
+                    if not is_playlist_empty:
+                        break # 退出 os.walk 的最外层循环
+                # 设置首次点歌标记
+                global first_order
+                first_order = is_playlist_empty
+                # 异步搜索并下载
+                await search_song(extracted_content, User, UserID)
+            else:
+                await self.send_dm('点歌格式：点歌 [歌曲名]')
+
         if(Text == '切歌' or Text == '下一首'):
             current_song_id = sync_get_current_song_info()
             if str(UserID) in admin_ids or str(current_song_id) == str(UserID) or current_song_id == "":
