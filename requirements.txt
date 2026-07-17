@@ -1,0 +1,18 @@
+# Music-Live-on-Bilibili runtime dependencies
+# 安装方式: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+bilibili-api-python==17.4.2
+# HTTP
+requests==2.34.2
+# 图像
+Pillow==11.3.0
+# 音视频
+moviepy==2.2.1
+audioread==3.1.0
+mutagen==1.48.1
+# 字幕
+pysubs2==1.8.1
+PyYAML>=6.0
+lxml>=5.0
+aiohttp>=3.9
+beautifulsoup4>=4.12
+urllib3>=2

@@ -1,24 +1,28 @@
 {
-	"path": "/home/ubuntu/Music-Live-on-Bilibili",
-	"musicapi": "https://qq.papapoi.com/163music/",
-	"freespace": "15360",
-	"gift": "0",
-	"rtmp": {
-		"url": "",
-		"code": "",
-		"bitrate": "192"
-	},
-	"danmu": {
-		"cookie": "",
-		"token": "",
-		"roomid": "8712608",
-		"size": "20"
-	},
-	"QQmusic":{
-		"use": 0,
-		"cookie": ""
-	},
-	"nightvideo": {
-		"use": "0"
-	}
+  "path": "/home/pi/Music-Live-on-Bilibili",
+  "freespace": "15360",
+  "gift": "0",
+  "rtmp": {
+    "url": "rtmp://127.0.0.1:1935/",
+    "code": "livehime",
+    "bitrate": "300"
+  },
+  "danmu": {
+    "SESSDATA": "",
+    "bili_jct": "",
+    "buvid3": "",
+    "ac_time_value": "",
+    "roomid": "651233"
+  },
+  "musicAPI": {
+    "source": "netease",
+    "bitrate": 320,
+    "cookie": ""
+  },
+  "admin": {
+    "ids": ["1762226"]
+  },
+  "nightvideo": {
+    "use": "0"
+  }
 }
